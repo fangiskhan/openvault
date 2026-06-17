@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
 import SpreadsheetView, { type Sheet } from "./SpreadsheetView";
 import GraphView from "./GraphView";
+import StatusView from "./StatusView";
 
 type Project = { id: string; name: string; color: string | null; itemCount: number };
 type Connection = { id: string; name: string; color: string | null; slug: string; kind: string };
@@ -24,6 +25,9 @@ type ItemFull = {
   project: { id: string; name: string; color: string | null };
   type: string;
   source: string;
+  status: string | null;
+  dueAt: string | null;
+  closedAt: string | null;
   title: string;
   body: string;
   metadata: { sheets?: Sheet[] } | null;
@@ -47,10 +51,20 @@ const SCOPES = [
   { key: "all", label: "All" },
 ];
 
+const mini = {
+  background: "var(--bg-elevated)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  color: "var(--text)",
+  fontSize: 12,
+  padding: "2px 6px",
+};
+
 function iconFor(type: string) {
   if (type === "spreadsheet") return "▦";
   if (type === "meeting") return "◷";
   if (type === "task") return "☑";
+  if (type === "risk") return "▲";
   if (type === "file") return "⎙";
   if (type === "message") return "💬";
   return "§";
@@ -76,6 +90,7 @@ export default function AppShell() {
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [showGraph, setShowGraph] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
+  const [view, setView] = useState<"notes" | "status">("notes");
 
   const dirty = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -104,6 +119,7 @@ export default function AppShell() {
       setBodyDraft(it.body);
       setMode("read");
       setSave("idle");
+      setView("notes");
       setActiveProjectId((cur) => {
         if (it.projectId !== cur) loadDetail(it.projectId);
         return it.projectId;
@@ -205,6 +221,23 @@ export default function AppShell() {
     dirty.current = true;
     setBodyDraft(v);
   };
+
+  // Status / due / type changes (no debounce — explicit control changes).
+  const patchItem = useCallback(
+    async (patch: Record<string, unknown>) => {
+      if (!item) return;
+      await api(`/api/items/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const fresh: ItemFull = await api(`/api/items/${item.id}`);
+      setItem(fresh);
+      setTitle(fresh.title);
+      await loadDetail(item.projectId);
+    },
+    [item, loadDetail],
+  );
 
   const newNote = useCallback(async () => {
     if (!activeProjectId) return;
@@ -308,11 +341,21 @@ export default function AppShell() {
     (p) => p.id !== activeProjectId && !detail?.connections.some((c) => c.id === p.id),
   );
 
+  const statusOptions = item?.type === "task" ? ["open", "blocked", "done"] : ["open", "mitigating", "accepted", "closed"];
+
   return (
     <div className="app">
       <div className="topbar">
         <div className="brand">
           <span className="dot" /> OpenVault
+        </div>
+        <div className="scope">
+          <button className={view === "notes" ? "on" : ""} onClick={() => setView("notes")}>
+            Notes
+          </button>
+          <button className={view === "status" ? "on" : ""} onClick={() => setView("status")}>
+            Status
+          </button>
         </div>
         <div className="searchwrap">
           <input
@@ -462,7 +505,16 @@ export default function AppShell() {
         </aside>
 
         <main className="main">
-          {item ? (
+          {view === "status" && activeProjectId ? (
+            <StatusView
+              projectId={activeProjectId}
+              scope={scope}
+              onOpen={(id) => {
+                setView("notes");
+                openItem(id);
+              }}
+            />
+          ) : item ? (
             <div className="doc">
               <input
                 className="title-input"
@@ -473,7 +525,37 @@ export default function AppShell() {
               <div className="meta-row">
                 <span>{item.project.name}</span>
                 <span>·</span>
-                <span>{item.type}</span>
+                <select value={item.type} onChange={(e) => patchItem({ type: e.target.value })} style={mini}>
+                  {["note", "task", "risk", "meeting"].map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+                {(item.type === "task" || item.type === "risk") && (
+                  <select
+                    value={item.status ?? ""}
+                    onChange={(e) => patchItem({ status: e.target.value || null })}
+                    style={mini}
+                  >
+                    <option value="">— status —</option>
+                    {statusOptions.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {item.type === "task" && (
+                  <input
+                    type="date"
+                    value={item.dueAt ? item.dueAt.slice(0, 10) : ""}
+                    onChange={(e) =>
+                      patchItem({ dueAt: e.target.value ? new Date(e.target.value).toISOString() : null })
+                    }
+                    style={mini}
+                  />
+                )}
                 {save !== "idle" && (
                   <>
                     <span>·</span>
@@ -520,7 +602,7 @@ export default function AppShell() {
         </main>
 
         <aside className="rail">
-          {item && (
+          {view === "notes" && item && (
             <>
               <div className="rail-section">
                 <h4>Links</h4>

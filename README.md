@@ -95,6 +95,15 @@ claude mcp add --transport http openvault http://localhost:3000/api/mcp \
 
 **Tools** — read: `list_projects`, `get_status`, `get_attention`, `get_briefing`, `search`, `read_item`; write (attributed with an `actor`): `set_status`, `append_update`. So one agent can mark a blocker resolved and the next agent's `get_status` reflects it immediately — agents stay coordinated without a person relaying the update.
 
+### Two ways in: humans vs agents
+
+- **Humans** use the **Upload / New note** buttons in the UI to drop meeting minutes, docs, or spreadsheets. Optional.
+- **Agents** never touch those buttons — they read and write over MCP, automatically.
+
+### Automatic handover (no human, no buttons)
+
+Drop [`examples/agent-handover/CLAUDE.md`](examples/agent-handover/CLAUDE.md) into your repo and set the project id. Then every Claude Code / Cursor session loads status at the start and logs a handover (`append_update` + `set_status`) at the end — the next agent reads it instead of a person relaying status.
+
 ## Roadmap
 
 - **v2 — MCP server.** One endpoint so Claude Code / Cursor / Codex / Cline read and write your notes. Build once, every MCP client connects.

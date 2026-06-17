@@ -1,0 +1,52 @@
+import { cookies } from "next/headers";
+import crypto from "node:crypto";
+
+export const SESSION_COOKIE = "ov_session";
+
+function secret(): string {
+  return process.env.AUTH_SECRET || "dev-only-change-me";
+}
+
+// Auth is opt-in: a gate only exists when APP_PASSWORD is set. Local-only users
+// can leave it empty; anyone exposing the server should set it.
+export function authEnabled(): boolean {
+  return !!(process.env.APP_PASSWORD && process.env.APP_PASSWORD.length > 0);
+}
+
+function sign(value: string): string {
+  const mac = crypto.createHmac("sha256", secret()).update(value).digest("hex");
+  return `${value}.${mac}`;
+}
+
+function verifyToken(token: string | undefined): boolean {
+  if (!token) return false;
+  const idx = token.lastIndexOf(".");
+  if (idx < 0) return false;
+  const expected = sign(token.slice(0, idx));
+  const a = Buffer.from(token);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export function makeSessionToken(): string {
+  return sign(`ok:${Date.now()}`);
+}
+
+export function checkPassword(pw: string): boolean {
+  const expected = process.env.APP_PASSWORD || "";
+  const a = Buffer.from(pw);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export async function isAuthed(): Promise<boolean> {
+  if (!authEnabled()) return true;
+  const store = await cookies();
+  return verifyToken(store.get(SESSION_COOKIE)?.value);
+}
+
+// For API route handlers: returns a 401 Response when blocked, else null.
+export async function requireAuth(): Promise<Response | null> {
+  if (await isAuthed()) return null;
+  return Response.json({ error: "unauthorized" }, { status: 401 });
+}

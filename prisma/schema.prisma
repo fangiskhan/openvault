@@ -1,0 +1,121 @@
+// OpenVault data model.
+// Provider is SQLite for zero-setup local/self-host. For Vercel/Postgres,
+// change provider to "postgresql" and set DATABASE_URL (see .env.example).
+// We use `prisma db push` (no migration files) so switching providers is painless.
+// NOTE: no Prisma `enum` types — they aren't supported on SQLite. Enumerated
+// fields are plain strings, validated in the app with zod.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  color       String?  @default("#8b7cf6")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items         Item[]
+  files         FileAsset[]
+  relationsFrom ProjectRelation[] @relation("fromProject")
+  relationsTo   ProjectRelation[] @relation("toProject")
+}
+
+// A directed connection between two projects. Connected projects can resolve
+// wikilinks across the boundary and be included when search scope = "connected".
+model ProjectRelation {
+  id            String   @id @default(cuid())
+  fromProjectId String
+  toProjectId   String
+  kind          String   @default("related") // related | depends | parent | shares
+  createdAt     DateTime @default(now())
+
+  fromProject Project @relation("fromProject", fields: [fromProjectId], references: [id], onDelete: Cascade)
+  toProject   Project @relation("toProject", fields: [toProjectId], references: [id], onDelete: Cascade)
+
+  @@unique([fromProjectId, toProjectId])
+  @@index([toProjectId])
+}
+
+// The unified content record. A note, meeting minute, task, chat message,
+// uploaded file, or spreadsheet are all Items — so integrations (Slack/Jira/
+// GitHub) and uploads just create Items and inherit search/links for free.
+model Item {
+  id        String   @id @default(cuid())
+  projectId String
+  type      String   @default("note")  // note | meeting | task | message | file | spreadsheet
+  source    String   @default("local") // local | upload | slack | jira | github
+  title     String
+  body      String   @default("")       // markdown
+  sourceRef String?                      // external id / url for integrated items
+  metadata  String?                      // JSON string (e.g. parsed spreadsheet sheets)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project  Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  outLinks Link[]      @relation("fromItem")
+  inLinks  Link[]      @relation("toItem")
+  tags     ItemTag[]
+  files    FileAsset[]
+
+  @@index([projectId])
+  @@index([type])
+}
+
+// A wikilink edge. toItemId is null for an unresolved ("ghost") link.
+model Link {
+  id          String   @id @default(cuid())
+  fromItemId  String
+  toItemId    String?
+  targetTitle String // raw [[target]] text, used to (re)resolve links
+  createdAt   DateTime @default(now())
+
+  fromItem Item  @relation("fromItem", fields: [fromItemId], references: [id], onDelete: Cascade)
+  toItem   Item? @relation("toItem", fields: [toItemId], references: [id], onDelete: SetNull)
+
+  @@index([fromItemId])
+  @@index([toItemId])
+  @@index([targetTitle])
+}
+
+model Tag {
+  id    String    @id @default(cuid())
+  name  String    @unique
+  items ItemTag[]
+}
+
+model ItemTag {
+  itemId String
+  tagId  String
+  item   Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, tagId])
+}
+
+// Uploaded file (Excel/CSV/PDF/etc.). The original lives in blob storage
+// (local disk when self-hosted, Vercel Blob in the cloud); parsed spreadsheet
+// data is stored as JSON on the associated spreadsheet Item's metadata.
+model FileAsset {
+  id         String   @id @default(cuid())
+  projectId  String
+  itemId     String?
+  filename   String
+  mimeType   String
+  size       Int
+  storageKey String
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  item    Item?   @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+}

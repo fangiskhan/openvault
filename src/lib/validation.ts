@@ -69,3 +69,21 @@ export const connectSchema = z.object({
 });
 
 export const searchScopeSchema = z.enum(SEARCH_SCOPES).catch("project");
+
+// Import: turn content into Obsidian-style linked notes. Each entry becomes its
+// own note; an optional Map-of-Content note wikilinks them all.
+export const importNoteSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  body: z.string().max(1_000_000),
+  type: z.enum(ITEM_TYPES).optional(),
+});
+
+export const importSchema = z.object({
+  projectName: z.string().trim().min(1).max(120),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  description: z.string().max(2000).optional(),
+  notes: z.array(importNoteSchema).min(1).max(1000),
+  mocTitle: z.string().trim().max(300).optional(),
+  connectTo: z.array(z.string()).max(50).optional(),
+  replace: z.boolean().optional(),
+});

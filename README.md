@@ -80,6 +80,21 @@ Keep SQLite, or point `DATABASE_URL` at a local Postgres. Set `APP_PASSWORD` + `
 | `STORAGE_DRIVER` | `local` (uploads → `./storage`) or `vercel` (Vercel Blob) |
 | `BLOB_READ_WRITE_TOKEN` | Required when `STORAGE_DRIVER=vercel` |
 
+## Connect your AI agents (MCP)
+
+OpenVault exposes an MCP endpoint at `/api/mcp` so your AI agents — Claude Code, Cursor, Codex — read and write the **same** project state. No human handover.
+
+Connect Claude Code:
+
+```bash
+claude mcp add --transport http openvault http://localhost:3000/api/mcp \
+  --header "Authorization: Bearer $MCP_TOKEN"
+```
+
+(Drop the `--header` if `MCP_TOKEN` is empty for local use.)
+
+**Tools** — read: `list_projects`, `get_status`, `get_attention`, `get_briefing`, `search`, `read_item`; write (attributed with an `actor`): `set_status`, `append_update`. So one agent can mark a blocker resolved and the next agent's `get_status` reflects it immediately — agents stay coordinated without a person relaying the update.
+
 ## Roadmap
 
 - **v2 — MCP server.** One endpoint so Claude Code / Cursor / Codex / Cline read and write your notes. Build once, every MCP client connects.

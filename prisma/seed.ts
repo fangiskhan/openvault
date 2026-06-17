@@ -39,6 +39,24 @@ async function main() {
     await prisma.item.create({ data: { projectId, title, body, type: title === "Kickoff Meeting" ? "meeting" : title === "Tasks" ? "task" : "note" } });
   }
 
+  // Live status signals so the Status view + MCP demonstrate "red" out of the box.
+  const tasksItem = await prisma.item.findFirst({ where: { projectId: atlas.id, type: "task" } });
+  if (tasksItem) {
+    await prisma.item.update({
+      where: { id: tasksItem.id },
+      data: { status: "blocked", dueAt: new Date(Date.now() - 4 * 86_400_000) },
+    });
+  }
+  await prisma.item.create({
+    data: {
+      projectId: atlas.id,
+      type: "risk",
+      status: "open",
+      title: "Vendor API may slip",
+      body: "Third-party API delivery is slipping. Mitigation: build a stub. Evidence: [[Kickoff Meeting]].",
+    },
+  });
+
   const all = await prisma.item.findMany();
   for (const it of all) await syncItemLinks(it.id, it.projectId, it.body);
   for (const it of all) await resolveGhostLinks(it.id, it.projectId, it.title);

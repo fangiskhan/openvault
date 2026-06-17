@@ -10,13 +10,13 @@ export async function POST(req: Request) {
 
   const parsed = createItemSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return badRequest(parsed.error.flatten());
-  const { projectId, title, body, type } = parsed.data;
+  const { projectId, title, body, type, status, dueAt, closedAt } = parsed.data;
 
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
   if (!project) return badRequest("unknown projectId");
 
   const item = await prisma.item.create({
-    data: { projectId, title, body: body ?? "", type: type ?? "note" },
+    data: { projectId, title, body: body ?? "", type: type ?? "note", status, dueAt, closedAt },
   });
   await syncItemLinks(item.id, projectId, item.body);
   await resolveGhostLinks(item.id, projectId, item.title);

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { scopeProjectIds } from "@/lib/projects";
-import { searchScopeSchema } from "@/lib/validation";
+import { searchScopeSchema, CONTENT_TYPES } from "@/lib/validation";
 
 export async function GET(req: Request) {
   const denied = await requireAuth();
@@ -13,7 +13,10 @@ export async function GET(req: Request) {
   const projectIds = await scopeProjectIds(projectId, scope);
 
   const items = await prisma.item.findMany({
-    where: projectIds ? { projectId: { in: projectIds } } : {},
+    where: {
+      type: { in: [...CONTENT_TYPES] },
+      ...(projectIds ? { projectId: { in: projectIds } } : {}),
+    },
     select: { id: true, title: true, type: true, projectId: true, project: { select: { color: true } } },
   });
   const itemIds = new Set(items.map((i) => i.id));

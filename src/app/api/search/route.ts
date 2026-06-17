@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { scopeProjectIds } from "@/lib/projects";
-import { searchScopeSchema } from "@/lib/validation";
+import { searchScopeSchema, CONTENT_TYPES } from "@/lib/validation";
 
 export async function GET(req: Request) {
   const denied = await requireAuth();
@@ -19,6 +19,7 @@ export async function GET(req: Request) {
   // On Postgres, add `mode: "insensitive"` for the same behaviour.
   const items = await prisma.item.findMany({
     where: {
+      type: { in: [...CONTENT_TYPES] },
       ...(projectIds ? { projectId: { in: projectIds } } : {}),
       OR: [{ title: { contains: q } }, { body: { contains: q } }],
     },

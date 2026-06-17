@@ -15,13 +15,16 @@ datasource db {
 }
 
 model Project {
-  id          String   @id @default(cuid())
-  slug        String   @unique
+  id          String    @id @default(cuid())
+  slug        String    @unique
   name        String
   description String?
-  color       String?  @default("#8b7cf6")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  color       String?   @default("#8b7cf6")
+  health      String? // manual RAG override: green | amber | red — shown ALONGSIDE the computed rollup, never merged
+  healthNote  String?
+  healthSetAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   items         Item[]
   files         FileAsset[]
@@ -46,19 +49,23 @@ model ProjectRelation {
 }
 
 // The unified content record. A note, meeting minute, task, chat message,
-// uploaded file, or spreadsheet are all Items — so integrations (Slack/Jira/
-// GitHub) and uploads just create Items and inherit search/links for free.
+// uploaded file, spreadsheet, risk, or generated briefing are all Items — so
+// integrations (Slack/Jira/GitHub) and uploads just create Items and inherit
+// search/links for free.
 model Item {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   projectId String
-  type      String   @default("note")  // note | meeting | task | message | file | spreadsheet
-  source    String   @default("local") // local | upload | slack | jira | github
+  type      String    @default("note") // note | meeting | task | message | file | spreadsheet | risk | briefing
+  source    String    @default("local") // local | upload | slack | jira | github
   title     String
-  body      String   @default("")       // markdown
-  sourceRef String?                      // external id / url for integrated items
-  metadata  String?                      // JSON string (e.g. parsed spreadsheet sheets)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  body      String    @default("") // markdown
+  sourceRef String? // external id / url for integrated items
+  metadata  String? // JSON string (parsed spreadsheet sheets, risk meta, briefing doc)
+  status    String? // task: open|blocked|done · risk: open|mitigating|accepted|closed
+  dueAt     DateTime?
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   project  Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   outLinks Link[]      @relation("fromItem")
@@ -68,6 +75,8 @@ model Item {
 
   @@index([projectId])
   @@index([type])
+  @@index([status])
+  @@index([dueAt])
 }
 
 // A wikilink edge. toItemId is null for an unresolved ("ghost") link.

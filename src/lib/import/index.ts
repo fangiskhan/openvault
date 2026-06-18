@@ -17,6 +17,41 @@ export type ImportInput = {
 // Create Obsidian-style linked notes from content: one note per entry, an
 // optional MOC index that wikilinks them, project connections, and full link
 // resolution so backlinks and the graph light up.
+const STOPWORDS = new Set(
+  "the and for that with you your this have from will into are was were our out get got can not but they them then than what when where which while over under just only also more some need want make like there their here this that note notes session".split(
+    " ",
+  ),
+);
+
+function keywordsOf(text: string): Set<string> {
+  const counts = new Map<string, number>();
+  for (const w of text.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []) {
+    if (STOPWORDS.has(w)) continue;
+    counts.set(w, (counts.get(w) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map((e) => e[0]),
+  );
+}
+
+// Obsidian-style cross-linking: append a "## Related" section of [[wikilinks]]
+// to each note, pointing at the few notes it shares the most keywords with — so
+// the graph becomes a web, not a star. Cheap, deterministic, no AI.
+function withRelatedLinks(notes: ImportNote[], maxLinks = 3, minShared = 2): ImportNote[] {
+  if (notes.length < 3) return notes;
+  const kw = notes.map((n) => keywordsOf(`${n.title} ${n.body}`));
+  return notes.map((n, i) => {
+    const related = notes
+      .map((m, j) => ({ title: m.title, shared: j === i ? -1 : [...kw[i]].filter((w) => kw[j].has(w)).length }))
+      .filter((x) => x.shared >= minShared)
+      .sort((a, b) => b.shared - a.shared)
+      .slice(0, maxLinks)
+      .map((x) => x.title);
+    if (!related.length) return n;
+    return { ...n, body: `${n.body}\n\n## Related\n${related.map((t) => `- [[${t}]]`).join("\n")}` };
+  });
+}
+
 export async function importProject(input: ImportInput) {
   let project = await prisma.project.findFirst({ where: { name: input.projectName } });
 
@@ -30,8 +65,10 @@ export async function importProject(input: ImportInput) {
     await prisma.item.deleteMany({ where: { projectId: project.id } });
   }
 
+  const notes = withRelatedLinks(input.notes);
+
   const created: { id: string; body: string }[] = [];
-  for (const n of input.notes) {
+  for (const n of notes) {
     const item = await prisma.item.create({
       data: { projectId: project.id, title: n.title, body: n.body, type: n.type ?? "note", source: "import" },
     });

@@ -4,21 +4,48 @@ import { rollup, rollupConnected, rollupMany } from "../status";
 import { scopeProjectIds } from "../projects";
 import { buildTemplatedBriefing } from "../briefing/templated";
 import { ITEM_STATUSES, CONTENT_TYPES } from "../validation";
+import { approveAccount, setRole } from "../accounts";
+
+// The authenticated caller, resolved from the MCP bearer token by the route.
+// null = anonymous (only possible in open local/dev mode).
+export type ToolCtx = { account: { id: string; username: string; role: string; status: string } | null };
 
 export type Tool = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  handler: (args: Record<string, unknown>) => Promise<unknown>;
+  handler: (args: Record<string, unknown>, ctx?: ToolCtx) => Promise<unknown>;
 };
 
 const scopeProp = { type: "string", enum: ["project", "connected", "all"], default: "project" };
+
+// Writes are attributed to the authenticated account when present (enforced
+// identity), falling back to a free-text actor only in open/legacy mode.
+const actorOf = (ctx?: ToolCtx, fallback?: unknown) =>
+  ctx?.account?.username ?? (typeof fallback === "string" && fallback ? fallback : "agent");
+
+function requireApprover(ctx?: ToolCtx) {
+  const a = ctx?.account;
+  if (!a || a.status !== "approved" || (a.role !== "owner" && a.role !== "executive")) {
+    throw new Error("owner/executive identity required (present an approved owner/executive token)");
+  }
+  return a;
+}
 
 async function allProjectIds(): Promise<string[]> {
   return (await prisma.project.findMany({ select: { id: true } })).map((p) => p.id);
 }
 
 export const tools: Tool[] = [
+  {
+    name: "whoami",
+    description: "Return the identity you are authenticated as (username, role, status), or anonymous if connected with the shared/legacy token.",
+    inputSchema: { type: "object", properties: {} },
+    handler: async (_a, ctx) =>
+      ctx?.account
+        ? { username: ctx.account.username, role: ctx.account.role, status: ctx.account.status }
+        : { anonymous: true },
+  },
   {
     name: "list_projects",
     description: "List all projects (id, name, slug, manual health). Start here to find a projectId.",
@@ -49,7 +76,7 @@ export const tools: Tool[] = [
   {
     name: "get_attention",
     description:
-      "List the areas needing attention (overdue, blocked, open risks, due-soon, stale) for a project/scope. Each signal cites the source item id so you can read_item for detail.",
+      "List the areas needing attention (overdue, blocked, open risks, due-soon, stale) for a project/scope. Each signal cites the source item id so you can read_item for detail. Cross-project flags raised via flag_issue show up here too.",
     inputSchema: {
       type: "object",
       properties: { projectId: { type: "string" }, scope: scopeProp },
@@ -119,18 +146,19 @@ export const tools: Tool[] = [
   {
     name: "set_status",
     description:
-      "Set the status of a task (open|blocked|done) or risk (open|mitigating|accepted|closed). Records who changed it (actor) and when. This is how an agent updates shared state that other agents will read on their next get_status.",
+      "Set the status of a task (open|blocked|done) or risk (open|mitigating|accepted|closed). Records who changed it (your account) and when. This is how an agent updates shared state that other agents read on their next get_status.",
     inputSchema: {
       type: "object",
       properties: {
         itemId: { type: "string" },
         status: { type: "string", enum: [...ITEM_STATUSES] },
-        actor: { type: "string", description: "who is making the change (agent or user name)" },
+        actor: { type: "string", description: "legacy only; ignored when authenticated as an account" },
       },
       required: ["itemId", "status"],
     },
-    handler: async (a) => {
-      const { itemId, status, actor = "agent" } = a as { itemId: string; status: string; actor?: string };
+    handler: async (a, ctx) => {
+      const { itemId, status } = a as { itemId: string; status: string };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
       const it = await prisma.item.findUnique({ where: { id: itemId }, select: { metadata: true } });
       if (!it) throw new Error("item not found");
       const meta = it.metadata ? JSON.parse(it.metadata) : {};
@@ -148,14 +176,15 @@ export const tools: Tool[] = [
   {
     name: "append_update",
     description:
-      "Append an attributed status update to a project — a short note other agents and humans will see in 'recently updated'. Use this to record progress without a human handover.",
+      "Append an attributed status update to a project — a short note other agents and humans will see in 'recently updated'. Attributed to your account.",
     inputSchema: {
       type: "object",
-      properties: { projectId: { type: "string" }, text: { type: "string" }, actor: { type: "string" } },
+      properties: { projectId: { type: "string" }, text: { type: "string" }, actor: { type: "string", description: "legacy only; ignored when authenticated" } },
       required: ["projectId", "text"],
     },
-    handler: async (a) => {
-      const { projectId, text, actor = "agent" } = a as { projectId: string; text: string; actor?: string };
+    handler: async (a, ctx) => {
+      const { projectId, text } = a as { projectId: string; text: string };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
       const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
       if (!project) throw new Error("project not found");
       const item = await prisma.item.create({
@@ -170,6 +199,225 @@ export const tools: Tool[] = [
         select: { id: true, createdAt: true },
       });
       return { ...item, by: actor };
+    },
+  },
+  {
+    name: "flag_issue",
+    description:
+      "Flag a bug/blocker that must be fixed in ANOTHER project (cross-project). Use when a problem you hit needs a fix outside the project you're in. Creates an attention item in the responsible (target) project with the error and problem, attributed to you, optionally addressed to a specific account (toAccount) who then sees it in get_inbox. Surfaces in that project's get_attention. Resolve targetProjectId with list_projects.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        targetProjectId: { type: "string", description: "id of the project responsible for the fix" },
+        title: { type: "string", description: "short summary of the bug to fix" },
+        problem: { type: "string", description: "what is wrong and what triggers it" },
+        error: { type: "string", description: "the error message / stack trace observed" },
+        fromProject: { type: "string", description: "name/id of the project that hit the bug (provenance)" },
+        toAccount: { type: "string", description: "username to address this to (they see it in get_inbox)" },
+        severity: { type: "string", enum: ["blocker", "risk"], default: "blocker" },
+      },
+      required: ["targetProjectId", "title"],
+    },
+    handler: async (a, ctx) => {
+      const { targetProjectId, title, problem = "", error = "", fromProject = "", toAccount = "", severity = "blocker" } = a as {
+        targetProjectId: string;
+        title: string;
+        problem?: string;
+        error?: string;
+        fromProject?: string;
+        toAccount?: string;
+        severity?: string;
+      };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const project = await prisma.project.findUnique({ where: { id: targetProjectId }, select: { id: true } });
+      if (!project) throw new Error("target project not found (use list_projects to get its id)");
+
+      let assigneeAccountId: string | null = null;
+      if (toAccount) {
+        const t = await prisma.account.findUnique({ where: { username: toAccount }, select: { id: true } });
+        assigneeAccountId = t?.id ?? null;
+      }
+
+      const isRisk = severity === "risk";
+      const lines = [`**Flagged from:** ${fromProject || "(unspecified)"} · **by:** ${actor}${toAccount ? ` · **to:** @${toAccount}` : ""} (via MCP)`];
+      if (problem) lines.push("", `**Problem:** ${problem}`);
+      if (error) lines.push("", "**Error:**", "```", error, "```");
+
+      const item = await prisma.item.create({
+        data: {
+          projectId: targetProjectId,
+          type: isRisk ? "risk" : "task",
+          status: isRisk ? "open" : "blocked",
+          source: "mcp",
+          title: `⚑ ${title}`,
+          body: lines.join("\n"),
+          assigneeAccountId,
+          metadata: JSON.stringify({ actor, via: "mcp", kind: "cross_project_flag", flaggedFrom: fromProject || null, toAccount: toAccount || null }),
+        },
+        select: { id: true, projectId: true, type: true, status: true, createdAt: true },
+      });
+      return {
+        ...item,
+        by: actor,
+        addressedTo: toAccount || null,
+        note: `Flagged in the target project; surfaces in get_attention as ${isRisk ? "an open risk" : "a blocker"}${toAccount ? ` and in @${toAccount}'s get_inbox` : ""}.`,
+      };
+    },
+  },
+  {
+    name: "request_info",
+    description:
+      "Ask a specific account for information you need — e.g. 'how do I integrate X into Lumi?'. Creates an open question in the relevant project addressed to that account; they see it in get_inbox. Attributed to you.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "the project the question is about (use list_projects)" },
+        toAccount: { type: "string", description: "username to ask" },
+        question: { type: "string" },
+      },
+      required: ["projectId", "toAccount", "question"],
+    },
+    handler: async (a, ctx) => {
+      const { projectId, toAccount, question } = a as { projectId: string; toAccount: string; question: string };
+      const from = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+      if (!project) throw new Error("project not found (use list_projects to get its id)");
+      const target = await prisma.account.findUnique({ where: { username: toAccount }, select: { id: true, username: true } });
+      if (!target) throw new Error(`no account '${toAccount}'`);
+      const item = await prisma.item.create({
+        data: {
+          projectId,
+          type: "task",
+          status: "open",
+          source: "mcp",
+          title: `❓ ${question.slice(0, 80)}`,
+          body: `**Question for @${toAccount}** from ${from}:\n\n${question}`,
+          assigneeAccountId: target.id,
+          metadata: JSON.stringify({ actor: from, via: "mcp", kind: "info_request", toAccount }),
+        },
+        select: { id: true, projectId: true, createdAt: true },
+      });
+      return { ...item, from, to: target.username, note: `Sent to @${target.username}; they will see it in get_inbox.` };
+    },
+  },
+  {
+    name: "get_inbox",
+    description: "List open items addressed to YOU — cross-project flags and info requests assigned to your account. Requires an approved identity.",
+    inputSchema: { type: "object", properties: {} },
+    handler: async (_a, ctx) => {
+      if (!ctx?.account) throw new Error("no identity — connect with your approved account token to use get_inbox");
+      return prisma.item.findMany({
+        where: { assigneeAccountId: ctx.account.id, closedAt: null },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, projectId: true, type: true, status: true, title: true, createdAt: true },
+      });
+    },
+  },
+  {
+    name: "list_pending_accounts",
+    description: "List accounts awaiting approval. Owner/executive only.",
+    inputSchema: { type: "object", properties: {} },
+    handler: async (_a, ctx) => {
+      requireApprover(ctx);
+      return prisma.account.findMany({
+        where: { status: "pending" },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, username: true, displayName: true, createdAt: true },
+      });
+    },
+  },
+  {
+    name: "approve_account",
+    description: "Approve a pending account by username. Records who approved it permanently (accountability). Owner/executive only.",
+    inputSchema: { type: "object", properties: { username: { type: "string" } }, required: ["username"] },
+    handler: async (a, ctx) => {
+      const approver = requireApprover(ctx);
+      const { username } = a as { username: string };
+      const target = await prisma.account.findUnique({ where: { username }, select: { id: true } });
+      if (!target) throw new Error("account not found");
+      const up = await approveAccount(target.id, approver);
+      return { username: up.username, status: up.status, approvedBy: approver.username, approvedAt: up.approvedAt };
+    },
+  },
+  {
+    name: "appoint_executive",
+    description: "Grant a member approving rights (role=executive). Owner only.",
+    inputSchema: { type: "object", properties: { username: { type: "string" } }, required: ["username"] },
+    handler: async (a, ctx) => {
+      if (ctx?.account?.role !== "owner") throw new Error("owner only");
+      const { username } = a as { username: string };
+      const target = await prisma.account.findUnique({ where: { username }, select: { id: true } });
+      if (!target) throw new Error("account not found");
+      const up = await setRole(target.id, "executive", ctx.account);
+      return { username: up.username, role: up.role };
+    },
+  },
+  {
+    name: "register_mcp",
+    description:
+      "Register that a project exposes its own MCP endpoint and/or who owns it, so other agents can discover it via find_mcp and route to its owner. Approved identity required; only the current project owner or an owner/executive may change an already-owned project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "project to register (use list_projects)" },
+        mcpUrl: { type: "string", description: "the project's MCP endpoint URL (optional)" },
+        ownerUsername: { type: "string", description: "account that owns it; defaults to you" },
+      },
+      required: ["projectId"],
+    },
+    handler: async (a, ctx) => {
+      if (!ctx?.account) throw new Error("approved identity required");
+      const { projectId, mcpUrl, ownerUsername } = a as { projectId: string; mcpUrl?: string; ownerUsername?: string };
+      const p = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, ownerAccountId: true } });
+      if (!p) throw new Error("project not found (use list_projects)");
+      const privileged = ctx.account.role === "owner" || ctx.account.role === "executive";
+      if (p.ownerAccountId && p.ownerAccountId !== ctx.account.id && !privileged) {
+        throw new Error("only the current project owner or an owner/executive can change this");
+      }
+      let ownerId = ctx.account.id;
+      let ownerName = ctx.account.username;
+      if (ownerUsername) {
+        const o = await prisma.account.findUnique({ where: { username: ownerUsername }, select: { id: true, username: true } });
+        if (!o) throw new Error(`no account '${ownerUsername}'`);
+        ownerId = o.id;
+        ownerName = o.username;
+      }
+      const up = await prisma.project.update({
+        where: { id: projectId },
+        data: { ownerAccountId: ownerId, ...(mcpUrl ? { mcpUrl } : {}) },
+        select: { name: true, mcpUrl: true },
+      });
+      return { project: up.name, owner: ownerName, mcpUrl: up.mcpUrl, hasMcp: !!up.mcpUrl };
+    },
+  },
+  {
+    name: "find_mcp",
+    description:
+      "Discover whether a project exposes its own MCP endpoint and who owns it — so you can connect to it or route a question/flag to the right person. Give a project name, slug, or id.",
+    inputSchema: { type: "object", properties: { project: { type: "string", description: "project name, slug, or id" } }, required: ["project"] },
+    handler: async (a) => {
+      const { project } = a as { project: string };
+      const p = await prisma.project.findFirst({
+        where: { OR: [{ id: project }, { slug: project }, { name: project }] },
+        select: { id: true, name: true, mcpUrl: true, ownerAccountId: true },
+      });
+      if (!p) throw new Error("project not found");
+      let owner: string | null = null;
+      if (p.ownerAccountId) {
+        const o = await prisma.account.findUnique({ where: { id: p.ownerAccountId }, select: { username: true } });
+        owner = o?.username ?? null;
+      }
+      return {
+        project: p.name,
+        hasMcp: !!p.mcpUrl,
+        mcpUrl: p.mcpUrl ?? null,
+        owner,
+        hint: p.mcpUrl
+          ? `Connect to ${p.mcpUrl}${owner ? ` (owned by @${owner})` : ""}.`
+          : owner
+            ? `No MCP registered; route to owner @${owner} via request_info/flag_issue.`
+            : "No MCP and no owner registered for this project yet.",
+      };
     },
   },
 ];

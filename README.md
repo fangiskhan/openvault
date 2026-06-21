@@ -1,10 +1,14 @@
 # OpenVault
 
-A self-hosted knowledge hub where your team **and its AI agents** share one current source of project truth — so nobody has to chase people (or other agents) for a status update.
+**The shared source of truth your AI agents read *and write* — so nobody (and no agent) has to relay status again.**
 
-Notes, meeting minutes, tasks, risks, and spreadsheets live inside a **project**. Projects are isolated by default but can be **connected** so links and search cross between them. AI agents (Claude Code, Cursor, Codex) read and write the same state over MCP. Run it on your own PC, your own server, or Vercel — your data stays where you put it.
+OpenVault is a self-hosted project brain your team and its AI agents share over **MCP**. One agent records a status, raises a blocker, or logs what it just did; the next agent — on a different machine, in a different repo — reads it and acts. No standup, no handoff, no human in the middle.
 
-> **Maturity: working v1 / MVP.** The core loop — projects, status, cited briefings, and AI agents sharing state over MCP — works and is verified. **Multi-user, integrations (Jira/Slack/Notion), live sync, and the AI-written briefing are on the roadmap, not built yet.** Read **[Status & roadmap](#status--roadmap)** before relying on it for a team.
+> **The 30-second version:** Agent A finishes a task and writes a cross-project blocker to OpenVault over MCP. Agent B, starting cold, calls `get_attention` and instantly sees it — with the error and where the fix belongs — and acts on it. They stayed coordinated because the truth is *shared*, not *relayed*. *(demo clip ↓)*
+
+Notes, tasks, risks, meeting minutes and spreadsheets live inside **projects** that can be **connected**, so wikilinks, search and a cross-project graph cross the boundary. Run it on your own machine, your own server, or Vercel — your data stays where you put it.
+
+> **Maturity: working v1 / MVP.** The core loop — projects, status, cited briefings, **accounts + roles + approval**, and agents reading *and writing* shared state over MCP — works and is verified. **Per-account web login, live sync, integrations (Jira/Slack/Notion), and the AI-written briefing are on the roadmap.** See [Status & roadmap](#status--roadmap).
 
 ---
 
@@ -94,18 +98,21 @@ A normal Next.js app — modest requirements (1–2 vCPU, 1–4 GB RAM; a Raspbe
 npm install && npm run db:push && npm run build && npm run start
 ```
 
-Keep SQLite, or point `DATABASE_URL` at a local Postgres. Set `APP_PASSWORD`, `AUTH_SECRET`, and `MCP_TOKEN` if anyone else can reach it.
+Keep SQLite, or point `DATABASE_URL` at a local Postgres. Set `APP_PASSWORD`, `AUTH_SECRET`, and `MCP_TOKEN` — `npm run start` runs in production mode and **won't boot without them** (or with `OPENVAULT_PUBLIC=1` to opt into open gates). See [Configuration](#configuration).
 
 ## Configuration
 
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_URL` | SQLite file (`file:./dev.db`) locally, or a Postgres URL |
-| `APP_PASSWORD` | Human login gate. Empty = no gate (fine for purely local). **Set before exposing.** |
-| `AUTH_SECRET` | HMAC secret for the session cookie. Use a long random string. |
-| `MCP_TOKEN` | Bearer token agents present to `/api/mcp`. Empty = open (local only). |
+| `APP_PASSWORD` | Human login gate. Empty = no gate (fine for localhost). **Required in production** unless `OPENVAULT_PUBLIC=1`. |
+| `AUTH_SECRET` | HMAC secret for the session cookie. Use a long random string; **must be changed from the placeholder in production** (a known value lets sessions be forged). |
+| `MCP_TOKEN` | Bearer token agents present to `/api/mcp`. Empty = open (localhost only). **Required in production** unless `OPENVAULT_PUBLIC=1`. |
+| `OPENVAULT_PUBLIC` | Set to `1` to deliberately run with open gates (empty/placeholder secrets) in production. Unset by default. |
 | `STORAGE_DRIVER` | `local` (uploads → `./storage`) or `vercel` (Vercel Blob) |
 | `BLOB_READ_WRITE_TOKEN` | Required when `STORAGE_DRIVER=vercel` |
+
+**Fail-safe on exposure.** A production server (`NODE_ENV=production`, i.e. `npm run build && npm run start`, Vercel, or any real deploy) **refuses to start** if `APP_PASSWORD`/`AUTH_SECRET`/`MCP_TOKEN` are empty or left at their placeholders — so an exposed instance can't silently run with the human UI and the agent MCP write endpoint wide open. Local `npm run dev` is unaffected: the zero-config localhost loop still needs no secrets. To run open in production on purpose (a trusted LAN, a public read-only demo), set `OPENVAULT_PUBLIC=1`, which logs a loud warning at boot instead.
 
 ## Status & roadmap
 

@@ -47,8 +47,11 @@ function withRelatedLinks(notes: ImportNote[], maxLinks = 3, minShared = 2): Imp
       .sort((a, b) => b.shared - a.shared)
       .slice(0, maxLinks)
       .map((x) => x.title);
-    if (!related.length) return n;
-    return { ...n, body: `${n.body}\n\n## Related\n${related.map((t) => `- [[${t}]]`).join("\n")}` };
+    // Strip any pre-existing "## Related" block(s) first, so re-ingesting a note
+    // never stacks duplicate Related sections, then append the fresh one.
+    const base = n.body.replace(/\n*##\s*Related\s*\n(?:[ \t]*-[^\n]*\n?)*/gi, "").trimEnd();
+    if (!related.length) return base === n.body ? n : { ...n, body: base };
+    return { ...n, body: `${base}\n\n## Related\n${related.map((t) => `- [[${t}]]`).join("\n")}` };
   });
 }
 

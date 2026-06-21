@@ -5,6 +5,7 @@ import Markdown from "./Markdown";
 import SpreadsheetView, { type Sheet } from "./SpreadsheetView";
 import GraphView from "./GraphView";
 import StatusView from "./StatusView";
+import AccountsAdmin from "./AccountsAdmin";
 
 type Project = { id: string; name: string; color: string | null; itemCount: number };
 type Connection = { id: string; name: string; color: string | null; slug: string; kind: string };
@@ -90,6 +91,7 @@ export default function AppShell() {
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [showGraph, setShowGraph] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
+  const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status">("notes");
 
   const dirty = useRef(false);
@@ -416,6 +418,9 @@ export default function AppShell() {
         <button className="btn" onClick={() => setShowGraph(true)} disabled={!activeProjectId}>
           Graph
         </button>
+        <button className="btn" onClick={() => setShowAccounts(true)}>
+          Accounts
+        </button>
         <button className="btn btn-accent" onClick={newNote} disabled={!activeProjectId}>
           + New note
         </button>
@@ -639,9 +644,7 @@ export default function AppShell() {
         <div className="overlay" onClick={() => setShowGraph(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <span>
-                Graph — {scope === "all" ? "all projects" : scope === "connected" ? "connected projects" : detail?.name}
-              </span>
+              <span>Graph</span>
               <button className="btn-ghost" onClick={() => setShowGraph(false)}>
                 ✕
               </button>
@@ -691,6 +694,14 @@ export default function AppShell() {
                 ))
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {showAccounts && (
+        <div className="overlay" onClick={() => setShowAccounts(false)}>
+          <div className="spx" onClick={(e) => e.stopPropagation()}>
+            <AccountsAdmin />
           </div>
         </div>
       )}

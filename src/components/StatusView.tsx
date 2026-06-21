@@ -26,7 +26,7 @@ type Briefing = {
   coverage: { itemsConsidered: number; projects: number; windowDays: number };
 };
 
-const RAG: Record<Rag, string> = { green: "#5fb37a", amber: "#e3b341", red: "#f06d6d" };
+const RAG: Record<Rag, string> = { green: "var(--rag-green)", amber: "var(--rag-amber)", red: "var(--rag-red)" };
 const DOT = (c: string) => ({ width: 9, height: 9, borderRadius: "50%", background: c, flex: "none" as const });
 
 export default function StatusView({
@@ -129,7 +129,7 @@ export default function StatusView({
             onClick={() => onOpen(s.itemId)}
           >
             <span
-              style={DOT(s.label === "Critical" ? "var(--danger)" : s.label === "High" ? "#e3b341" : "var(--text-faint)")}
+              style={DOT(s.label === "Critical" ? "var(--danger)" : s.label === "High" ? "var(--rag-amber)" : "var(--text-faint)")}
             />
             <span style={{ flex: 1 }}>
               {s.title} <span className="sub">— {s.reason}</span>

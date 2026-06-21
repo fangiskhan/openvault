@@ -1,4 +1,6 @@
-import { tools, toolMap } from "@/lib/mcp/tools";
+import { tools, toolMap, type ToolCtx } from "@/lib/mcp/tools";
+import { secretsRequired } from "@/lib/security";
+import { resolveByToken, getOrCreateOwner } from "@/lib/accounts";
 
 // Minimal MCP server over JSON-RPC 2.0 (Streamable HTTP, single-response mode).
 // Any MCP client — Claude Code, Cursor, Codex — connects here to read and write
@@ -6,12 +8,35 @@ import { tools, toolMap } from "@/lib/mcp/tools";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
-// Auth: a static bearer token for agents, separate from the human session.
-// Empty MCP_TOKEN = open (fine for purely local use).
-function authOk(req: Request): boolean {
-  const token = process.env.MCP_TOKEN;
-  if (!token) return true;
-  return (req.headers.get("authorization") || "") === `Bearer ${token}`;
+// Resolve the caller's identity from the bearer token:
+//  - the shared MCP_TOKEN (legacy/bootstrap key) → the root owner account
+//  - a per-account token → that account (must be approved; pending/revoked rejected)
+// Returns a ToolCtx (account, possibly null in open dev) used to attribute every
+// write to the real person, or a `reject` Response. An empty MCP_TOKEN is only
+// allowed when running open (dev / OPENVAULT_PUBLIC=1); assertSecureBoot stops a
+// production server with no token, this is the request-time backstop.
+async function resolveCaller(req: Request): Promise<ToolCtx | { reject: Response }> {
+  const bearer = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  const shared = process.env.MCP_TOKEN;
+
+  if (shared && bearer && bearer === shared) {
+    const owner = await getOrCreateOwner();
+    return { account: { id: owner.id, username: owner.username, role: owner.role, status: owner.status } };
+  }
+  if (bearer) {
+    const acc = await resolveByToken(bearer);
+    if (!acc) return { reject: error(null, -32001, "unknown token", 401) };
+    if (acc.status !== "approved") {
+      return { reject: error(null, -32001, `account '${acc.username}' is ${acc.status} — an owner/executive must approve it`, 403) };
+    }
+    return { account: { id: acc.id, username: acc.username, role: acc.role, status: acc.status } };
+  }
+  // No bearer presented.
+  if (!shared) {
+    if (secretsRequired()) return { reject: error(null, -32001, "server misconfigured: MCP_TOKEN is not set", 503) };
+    return { account: null }; // open local/dev
+  }
+  return { reject: error(null, -32001, "unauthorized", 401) };
 }
 
 function result(id: unknown, value: unknown) {
@@ -28,7 +53,9 @@ type RpcMessage = {
 };
 
 export async function POST(req: Request) {
-  if (!authOk(req)) return error(null, -32001, "unauthorized", 401);
+  const caller = await resolveCaller(req);
+  if ("reject" in caller) return caller.reject;
+  const ctx: ToolCtx = caller;
 
   let msg: RpcMessage;
   try {
@@ -65,7 +92,7 @@ export async function POST(req: Request) {
       const tool = params?.name ? toolMap.get(params.name) : undefined;
       if (!tool) return error(id, -32602, `unknown tool: ${params?.name}`);
       try {
-        const out = await tool.handler(params?.arguments ?? {});
+        const out = await tool.handler(params?.arguments ?? {}, ctx);
         return result(id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
       } catch (e) {
         return result(id, {

@@ -23,6 +23,8 @@ model Project {
   health      String? // manual RAG override: green | amber | red — shown ALONGSIDE the computed rollup, never merged
   healthNote  String?
   healthSetAt DateTime?
+  ownerAccountId String? // account that owns/maintains this project (routing + find_mcp)
+  mcpUrl         String? // this project's own MCP endpoint, if it exposes one
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -64,6 +66,7 @@ model Item {
   status    String? // task: open|blocked|done · risk: open|mitigating|accepted|closed
   dueAt     DateTime?
   closedAt  DateTime?
+  assigneeAccountId String? // account a flag/request is addressed to (simple inbox routing; no FK)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
@@ -77,6 +80,7 @@ model Item {
   @@index([type])
   @@index([status])
   @@index([dueAt])
+  @@index([assigneeAccountId])
 }
 
 // A wikilink edge. toItemId is null for an unresolved ("ghost") link.
@@ -127,4 +131,44 @@ model FileAsset {
   item    Item?   @relation(fields: [itemId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
+}
+
+// ---- Accounts, approval & audit (multi-user identity layer) ----
+// A person or agent with an identity on this server. Accounts are requested
+// (status=pending) and must be approved by an owner/executive before they can
+// authenticate via a per-account token. The owner is the root authority; owners
+// appoint executives, who may also approve accounts.
+model Account {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  displayName  String?
+  role         String    @default("member") // owner | executive | member
+  status       String    @default("pending") // pending | approved | revoked
+  token        String    @unique // per-account bearer key for MCP / API identity
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  approvedBy Account?  @relation("approver", fields: [approvedById], references: [id])
+  approved   Account[] @relation("approver")
+
+  @@index([status])
+  @@index([token])
+}
+
+// Append-only accountability log. NEVER updated or deleted. Records who did what
+// to whom (notably who approved which account) so a mistaken approval traces to
+// its approver. Identities are stored as plain strings so the record survives a
+// later rename or deletion.
+model AuditEvent {
+  id        String   @id @default(cuid())
+  action    String // register | approve | revoke | appoint_executive | bootstrap_owner
+  actor     String? // who performed the action (username)
+  target    String? // who/what it was about (username)
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([target])
 }

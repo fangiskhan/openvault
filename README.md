@@ -47,7 +47,7 @@ OpenVault exposes an MCP endpoint at `/api/mcp` so AI agents read and write the 
 Connect Claude Code:
 
 ```bash
-claude mcp add --transport http openvault http://localhost:3000/api/mcp \
+claude mcp add --transport http openvault http://localhost:6900/api/mcp \
   --header "Authorization: Bearer $MCP_TOKEN"
 ```
 
@@ -73,7 +73,7 @@ npm install
 cp .env.example .env        # defaults work as-is for local use
 npm run db:push             # create the SQLite database
 npm run db:seed             # optional: demo projects + a "red" status to look at
-npm run dev                 # http://localhost:3000
+npm run dev                 # http://localhost:6900
 ```
 
 A fully local, offline, file-on-disk workspace. No accounts, no cloud.

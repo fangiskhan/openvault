@@ -17,7 +17,7 @@ OpenVault holds your projects' notes, status, risks, session history, and codeba
 If these tools are not available in the session, OpenVault isn't connected. Tell the user to run:
 
 ```
-claude mcp add openvault http://localhost:3000/api/mcp --transport http --scope user
+claude mcp add openvault http://localhost:6900/api/mcp --transport http --scope user
 ```
 
 and make sure the server is running (`npm run dev` in the OpenVault repo), then start a new session.

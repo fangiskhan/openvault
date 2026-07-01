@@ -159,17 +159,15 @@ export const tools: Tool[] = [
     handler: async (a, ctx) => {
       const { itemId, status } = a as { itemId: string; status: string };
       const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
-      const it = await prisma.item.findUnique({ where: { id: itemId }, select: { metadata: true } });
-      if (!it) throw new Error("item not found");
-      const meta = it.metadata ? JSON.parse(it.metadata) : {};
-      meta.lastStatusBy = actor;
-      meta.lastStatusVia = "mcp";
       const closedAt = status === "done" || status === "closed" || status === "accepted" ? new Date() : null;
-      const updated = await prisma.item.update({
-        where: { id: itemId },
-        data: { status, closedAt, metadata: JSON.stringify(meta) },
-        select: { id: true, status: true, updatedAt: true },
-      });
+      // Atomic single-row update — no read-modify-write on the metadata JSON, so
+      // two agents writing the same item can't clobber each other. Provenance
+      // (who set it, when) goes to the append-only audit log, not a mutable blob.
+      const updated = await prisma.item
+        .update({ where: { id: itemId }, data: { status, closedAt }, select: { id: true, status: true, updatedAt: true } })
+        .catch(() => null);
+      if (!updated) throw new Error("item not found");
+      await prisma.auditEvent.create({ data: { action: "set_status", actor, target: itemId, detail: status } });
       return { ...updated, by: actor };
     },
   },

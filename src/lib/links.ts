@@ -26,7 +26,18 @@ export async function syncItemLinks(itemId: string, projectId: string, body: str
   const projectIds = await connectedProjectIds(projectId);
   const candidates = await prisma.item.findMany({
     where: { projectId: { in: projectIds } },
-    select: { id: true, title: true },
+    select: { id: true, title: true, projectId: true, updatedAt: true },
+  });
+  // Deterministic resolution for duplicate titles: prefer a match in this item's
+  // OWN project, then the most-recently-updated, with a stable id tiebreak — so
+  // the same [[title]] always resolves to the same item (no arbitrary DB order).
+  candidates.sort((a, b) => {
+    const ap = a.projectId === projectId ? 0 : 1;
+    const bp = b.projectId === projectId ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    const t = b.updatedAt.getTime() - a.updatedAt.getTime();
+    if (t !== 0) return t;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   const byTitle = new Map<string, string>();
   for (const c of candidates) {

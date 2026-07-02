@@ -1,6 +1,15 @@
+import crypto from "node:crypto";
 import { tools, toolMap, type ToolCtx } from "@/lib/mcp/tools";
 import { secretsRequired } from "@/lib/security";
 import { resolveByToken, getOrCreateOwner } from "@/lib/accounts";
+
+// Constant-time string compare so the shared-token check can't be probed byte
+// by byte via response timing. Bails on length mismatch (that much is public).
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
 
 // Minimal MCP server over JSON-RPC 2.0 (Streamable HTTP, single-response mode).
 // Any MCP client — Claude Code, Cursor, Codex — connects here to read and write
@@ -19,7 +28,7 @@ async function resolveCaller(req: Request): Promise<ToolCtx | { reject: Response
   const bearer = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const shared = process.env.MCP_TOKEN;
 
-  if (shared && bearer && bearer === shared) {
+  if (shared && bearer && safeEqual(bearer, shared)) {
     const owner = await getOrCreateOwner();
     return { account: { id: owner.id, username: owner.username, role: owner.role, status: owner.status } };
   }

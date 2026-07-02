@@ -1,13 +1,19 @@
 import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
-import { saveBlob } from "@/lib/storage";
+import { saveBlob, safeStorageName } from "@/lib/storage";
 import { parseSpreadsheet } from "@/lib/spreadsheet";
 import { syncItemLinks } from "@/lib/links";
 import { badRequest } from "@/lib/http";
 
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+
 export async function POST(req: Request) {
   const denied = await requireAuth();
   if (denied) return denied;
+
+  // Reject oversized bodies before buffering them into memory.
+  const declared = Number(req.headers.get("content-length") || 0);
+  if (declared && declared > MAX_UPLOAD_BYTES) return badRequest("file too large (max 25 MB)");
 
   const form = await req.formData().catch(() => null);
   if (!form) return badRequest("expected multipart form data");
@@ -21,8 +27,9 @@ export async function POST(req: Request) {
   if (!project) return badRequest("unknown projectId");
 
   const buf = Buffer.from(await file.arrayBuffer());
+  if (buf.length > MAX_UPLOAD_BYTES) return badRequest("file too large (max 25 MB)");
   const isSheet = /\.(xlsx|xlsm|csv)$/i.test(file.name);
-  const storageKey = `${projectId}/${Date.now()}-${file.name}`.replace(/\s+/g, "_");
+  const storageKey = `${projectId}/${Date.now()}-${safeStorageName(file.name)}`;
   await saveBlob(storageKey, buf, file.type || "application/octet-stream");
 
   let type = "file";

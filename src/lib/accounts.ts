@@ -17,19 +17,24 @@ async function audit(action: string, actor: string | null, target: string | null
   await prisma.auditEvent.create({ data: { action, actor, target, detail: detail ?? null } });
 }
 
-// Root authority. Bootstrapped on first need from OWNER_USERNAME (default "owner").
+export function ownerUsername(): string {
+  return process.env.OWNER_USERNAME || "owner";
+}
+
+// Root authority, created (never adopted) on first need. Adopting a pre-existing
+// account named OWNER_USERNAME would be a privilege-escalation hole: anyone can
+// register that username and get promoted to root owner the first time the owner
+// is bootstrapped. So we only ever CREATE the owner. If the reserved name is
+// already taken — a squat from before this guard existed — we mint the owner
+// under a unique, un-squattable name instead of handing over the account.
 export async function getOrCreateOwner() {
   const existing = await prisma.account.findFirst({ where: { role: "owner" } });
   if (existing) return existing;
-  const username = process.env.OWNER_USERNAME || "owner";
-  const taken = await prisma.account.findUnique({ where: { username } });
-  if (taken) {
-    const up = await prisma.account.update({
-      where: { id: taken.id },
-      data: { role: "owner", status: "approved", approvedAt: new Date() },
-    });
-    await audit("bootstrap_owner", "system", username, "promoted existing account to owner");
-    return up;
+  const wanted = ownerUsername();
+  let username = wanted;
+  if (await prisma.account.findUnique({ where: { username } })) {
+    username = `${wanted}-root-${crypto.randomBytes(3).toString("hex")}`;
+    await audit("bootstrap_owner_squatted", "system", wanted, `'${wanted}' was already taken; owner created as '${username}'`);
   }
   const owner = await prisma.account.create({
     data: { username, displayName: "Owner", role: "owner", status: "approved", token: newToken(), approvedAt: new Date() },
@@ -40,6 +45,7 @@ export async function getOrCreateOwner() {
 
 export async function registerAccount(username: string, displayName?: string) {
   if (!USERNAME_RE.test(username)) throw new Error("invalid username (2-40 chars: letters, digits, . _ -)");
+  if (username.toLowerCase() === ownerUsername().toLowerCase()) throw new Error("that username is reserved");
   if (await prisma.account.findUnique({ where: { username } })) throw new Error("username already taken");
   const account = await prisma.account.create({
     data: { username, displayName: displayName || null, role: "member", status: "pending", token: newToken() },
@@ -79,6 +85,7 @@ export async function approveAccount(targetId: string, approver: { id: string; u
 export async function setRole(targetId: string, role: "executive" | "member", by: { username: string }) {
   const target = await prisma.account.findUnique({ where: { id: targetId } });
   if (!target) throw new Error("account not found");
+  if (target.role === "owner") throw new Error("the owner's role cannot be changed");
   const updated = await prisma.account.update({ where: { id: targetId }, data: { role } });
   await audit("appoint_" + role, by.username, target.username);
   return updated;

@@ -94,11 +94,55 @@ export default function AppShell() {
   const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status">("notes");
 
+  const [showConnectAgent, setShowConnectAgent] = useState(false);
+  const [origin, setOrigin] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
+
   const dirty = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Latest editable state, mirrored into a ref so flushSave can read it without
+  // a stale closure when the user switches notes mid-edit.
+  const latest = useRef({ item, title, bodyDraft });
+  useEffect(() => {
+    latest.current = { item, title, bodyDraft };
+  }, [item, title, bodyDraft]);
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
+
+  const copy = useCallback(async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1200);
+    } catch {
+      /* clipboard blocked — no-op */
+    }
+  }, []);
+
+  // Persist a pending edit immediately (used before navigating away from a note),
+  // so the 700ms autosave debounce can never drop the last keystrokes.
+  const flushSave = useCallback(async () => {
+    if (!dirty.current) return;
+    const { item: it, title: t, bodyDraft: b } = latest.current;
+    if (!it) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    dirty.current = false;
+    try {
+      await api(`/api/items/${it.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: t, body: b }),
+      });
+      setSave("saved");
+    } catch {
+      setSave("idle");
+    }
+  }, []);
 
   const loadProjects = useCallback(async () => {
     const ps: Project[] = await api("/api/projects");
@@ -114,6 +158,7 @@ export default function AppShell() {
 
   const openItem = useCallback(
     async (id: string) => {
+      await flushSave();
       const it: ItemFull = await api(`/api/items/${id}`);
       dirty.current = false;
       setItem(it);
@@ -127,7 +172,7 @@ export default function AppShell() {
         return it.projectId;
       });
     },
-    [loadDetail],
+    [loadDetail, flushSave],
   );
 
   const selectProject = useCallback(
@@ -265,9 +310,16 @@ export default function AppShell() {
     await selectProject(p.id);
   }, [loadProjects, selectProject]);
 
+  const loadDemo = useCallback(async () => {
+    await api("/api/demo", { method: "POST" });
+    const ps = await loadProjects();
+    if (ps.length) await selectProject(ps[0].id);
+  }, [loadProjects, selectProject]);
+
   const deleteItem = useCallback(async () => {
     if (!item) return;
     if (!window.confirm(`Delete “${item.title}”?`)) return;
+    dirty.current = false; // discarding — don't let a pending flush revive it
     const pid = item.projectId;
     await api(`/api/items/${item.id}`, { method: "DELETE" });
     setItem(null);
@@ -420,6 +472,9 @@ export default function AppShell() {
         </button>
         <button className="btn" onClick={() => setShowAccounts(true)}>
           Accounts
+        </button>
+        <button className="btn" onClick={() => setShowConnectAgent(true)} title="Connect Claude Code / Cursor / Codex">
+          Connect agent
         </button>
         <button className="btn btn-accent" onClick={newNote} disabled={!activeProjectId}>
           + New note
@@ -599,6 +654,29 @@ export default function AppShell() {
                 <p className="empty">Empty note. Switch to Edit to start writing.</p>
               )}
             </div>
+          ) : projects.length === 0 ? (
+            <div className="doc onboarding">
+              <h1>Welcome to OpenVault</h1>
+              <p className="lede">
+                A self-hosted, project-centric knowledge hub your team <em>and</em> its AI agents share over MCP —
+                notes, meetings, tasks, risks, and status in one grounded source of truth.
+              </p>
+              <div className="onboarding-actions">
+                <button className="btn btn-accent" onClick={newProject}>
+                  + Create your first project
+                </button>
+                <button className="btn" onClick={loadDemo}>
+                  Load demo data
+                </button>
+                <button className="btn" onClick={() => setShowConnectAgent(true)}>
+                  Connect an agent
+                </button>
+              </div>
+              <p className="empty" style={{ marginTop: 16 }}>
+                New here? “Load demo data” populates three linked projects with a live status board so you can see it
+                working, then delete it anytime.
+              </p>
+            </div>
           ) : (
             <div className="doc">
               <p className="empty">{activeProjectId ? "Select or create a note." : "Create a project to begin."}</p>
@@ -702,6 +780,64 @@ export default function AppShell() {
         <div className="overlay" onClick={() => setShowAccounts(false)}>
           <div className="spx" onClick={(e) => e.stopPropagation()}>
             <AccountsAdmin />
+          </div>
+        </div>
+      )}
+
+      {showConnectAgent && (
+        <div className="overlay" onClick={() => setShowConnectAgent(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span>Connect an agent</span>
+              <button className="btn-ghost" onClick={() => setShowConnectAgent(false)}>
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="empty" style={{ marginBottom: 12 }}>
+                Point Claude Code, Cursor, Codex, or any MCP client at this vault. It reads and writes shared project
+                state so agents stay coordinated — no human handover.
+              </p>
+
+              <h4 className="rail-h">1 · Add the MCP server</h4>
+              {(() => {
+                const url = (origin || "http://localhost:6900") + "/api/mcp";
+                const cmd = `claude mcp add openvault ${url} --transport http --scope user`;
+                return (
+                  <div className="copyrow">
+                    <code className="codeblock">{cmd}</code>
+                    <button className="btn" onClick={() => copy(cmd, "cmd")}>
+                      {copied === "cmd" ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                );
+              })()}
+              <p className="empty" style={{ margin: "6px 0 14px" }}>
+                In production, add your account token:{" "}
+                <code>--header &quot;Authorization: Bearer ovk_…&quot;</code> — create one under <strong>Accounts</strong>.
+              </p>
+
+              <h4 className="rail-h">2 · Project IDs</h4>
+              <p className="empty" style={{ marginBottom: 8 }}>
+                Agent tools and the <code>/vault</code> skill take a <code>projectId</code>. Copy one:
+              </p>
+              {projects.length === 0 ? (
+                <p className="empty">No projects yet — create one first.</p>
+              ) : (
+                projects.map((p) => (
+                  <div key={p.id} className="copyrow">
+                    <span className="cdot" style={{ background: p.color ?? "#8b7cf6" }} />
+                    <span className="truncate" style={{ flex: 1 }}>
+                      {p.name}
+                    </span>
+                    <code className="mono-id">{p.id}</code>
+                    <button className="btn" onClick={() => copy(p.id, p.id)}>
+                      {copied === p.id ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

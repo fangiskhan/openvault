@@ -621,6 +621,80 @@ textarea {
   overflow: auto;
 }
 
+/* ---------- onboarding (empty vault) ---------- */
+.onboarding {
+  padding-top: 64px;
+}
+.onboarding h1 {
+  font-family: var(--display);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  font-size: 30px;
+  margin: 0 0 14px;
+}
+.onboarding .lede {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  margin: 0 0 22px;
+  max-width: 620px;
+}
+.onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* ---------- connect-agent modal ---------- */
+.rail-h {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--text-muted);
+  margin: 18px 0 8px;
+  padding-bottom: 5px;
+  border-bottom: 2px solid var(--ink);
+}
+.rail-h:first-child {
+  margin-top: 0;
+}
+.copyrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.copyrow .cdot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.codeblock {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--ink);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 10px 12px;
+  border: 3px solid var(--ink);
+}
+.mono-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--lime);
+  border: 1px solid var(--ink);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
 /* ---------- login ---------- */
 .login-wrap {
   height: 100vh;

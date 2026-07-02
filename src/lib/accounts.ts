@@ -82,6 +82,23 @@ export function resolveByToken(token: string | null | undefined) {
   return prisma.account.findUnique({ where: { tokenHash: hashToken(token) } });
 }
 
+// Resolve any bearer credential on a plain HTTP request: the shared MCP_TOKEN
+// (constant-time compared) maps to the owner; an approved per-account token maps
+// to that account. Null = no valid bearer. Lets non-MCP endpoints (e.g. the
+// plain-text briefing used by session-start hooks) accept agent credentials.
+export async function resolveBearer(req: Request) {
+  const bearer = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!bearer) return null;
+  const shared = process.env.MCP_TOKEN;
+  if (shared) {
+    const a = Buffer.from(bearer);
+    const b = Buffer.from(shared);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return getOrCreateOwner();
+  }
+  const acc = await resolveByToken(bearer);
+  return acc && acc.status === "approved" ? acc : null;
+}
+
 // The acting approver for an HTTP request: an APP_PASSWORD session counts as the
 // owner; otherwise an approved owner/executive bearer token. Returns null if the
 // caller has no approving authority.

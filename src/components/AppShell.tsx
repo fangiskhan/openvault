@@ -963,6 +963,30 @@ export default function AppShell() {
                   </div>
                 ))
               )}
+
+              <h4 className="rail-h">3 · Make it automatic — the daily loop</h4>
+              <p className="empty" style={{ marginBottom: 8 }}>
+                Drop two files into a repo and every agent session starts pre-briefed, coordinates through the
+                work board, and hands over when done — no discipline required:
+              </p>
+              {projects.map((p) => (
+                <div key={p.id} className="copyrow">
+                  <span className="cdot" style={{ background: p.color ?? "#8b7cf6" }} />
+                  <span className="truncate" style={{ flex: 1 }}>
+                    {p.name}
+                  </span>
+                  <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=claude`} title="Drop into the repo root — teaches agents the full loop">
+                    CLAUDE.md
+                  </a>
+                  <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=hooks`} title="Merge into .claude/settings.json — injects the briefing at session start">
+                    Hooks
+                  </a>
+                </div>
+              ))}
+              <p className="empty" style={{ marginTop: 6 }}>
+                <code>CLAUDE.md</code> → repo root · <code>Hooks</code> → merge into <code>.claude/settings.json</code>{" "}
+                (its SessionStart hook curls this vault&apos;s plain-text briefing into the session&apos;s context).
+              </p>
             </div>
           </div>
         </div>

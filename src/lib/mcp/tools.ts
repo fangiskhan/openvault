@@ -702,6 +702,72 @@ export const tools: Tool[] = [
       };
     },
   },
+  {
+    name: "get_recent_activity",
+    description:
+      "Everything that changed in the last N hours (default 24): items created/updated, work intents that moved, and audit actions — grouped and attributed. The 'what did everyone do since yesterday' digest; call it at the start of your day/session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "omit for all projects" },
+        sinceHours: { type: "number", default: 24, description: "look-back window in hours (max 720)" },
+      },
+    },
+    handler: async (a) => {
+      const { projectId, sinceHours } = a as { projectId?: string; sinceHours?: number };
+      const hours = Math.min(Math.max(Number(sinceHours) || 24, 1), 720);
+      const since = new Date(Date.now() - hours * 3_600_000);
+      const projWhere = projectId ? { projectId } : {};
+
+      const [items, work, audit] = await Promise.all([
+        prisma.item.findMany({
+          where: { ...projWhere, updatedAt: { gte: since } },
+          orderBy: { updatedAt: "desc" },
+          take: 50,
+          select: {
+            id: true, title: true, type: true, status: true, updatedAt: true, createdAt: true,
+            project: { select: { name: true } },
+          },
+        }),
+        prisma.workIntent.findMany({
+          where: { ...projWhere, updatedAt: { gte: since } },
+          orderBy: { updatedAt: "desc" },
+          take: 50,
+          include: { project: { select: { name: true } } },
+        }),
+        prisma.auditEvent.findMany({
+          where: { createdAt: { gte: since } },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+          select: { action: true, actor: true, target: true, detail: true, createdAt: true },
+        }),
+      ]);
+
+      return {
+        since: since.toISOString(),
+        hours,
+        items: items.map((i) => ({
+          itemId: i.id,
+          project: i.project.name,
+          title: i.title,
+          type: i.type,
+          status: i.status,
+          isNew: i.createdAt >= since,
+          updatedAt: i.updatedAt,
+        })),
+        work: work.map((w) => ({
+          intentId: w.id,
+          project: w.project.name,
+          actor: w.actor,
+          intent: w.intent,
+          status: w.status,
+          reviewedBy: w.reviewedBy,
+          updatedAt: w.updatedAt,
+        })),
+        audit,
+      };
+    },
+  },
 ];
 
 export const toolMap = new Map(tools.map((t) => [t.name, t]));

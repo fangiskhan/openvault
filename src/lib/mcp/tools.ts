@@ -5,6 +5,7 @@ import { scopeProjectIds } from "../projects";
 import { buildTemplatedBriefing } from "../briefing/templated";
 import { ITEM_STATUSES, CONTENT_TYPES } from "../validation";
 import { approveAccount, setRole } from "../accounts";
+import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 
 // The authenticated caller, resolved from the MCP bearer token by the route.
 // null = anonymous (only possible in open local/dev mode).
@@ -416,6 +417,230 @@ export const tools: Tool[] = [
             ? `No MCP registered; route to owner @${owner} via request_info/flag_issue.`
             : "No MCP and no owner registered for this project yet.",
       };
+    },
+  },
+
+  // ---- Shared code layer: agents see the same code + each other's work ----
+  {
+    name: "sync_code",
+    description:
+      "Push file snapshots into the project's shared code mirror so other agents can browse them (get_code_map / read_code) without pulling git. Send only changed files (compare hashes via get_code_map first). Max 100 files per call, 200k chars per file.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        ref: { type: "string", description: "branch/commit label, e.g. 'main @ 7a2766e' (optional)" },
+        files: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { path: { type: "string" }, content: { type: "string" } },
+            required: ["path", "content"],
+          },
+        },
+        deletes: { type: "array", items: { type: "string" }, description: "paths removed from the repo" },
+        actor: { type: "string", description: "who is syncing (ignored when authenticated)" },
+      },
+      required: ["projectId", "files"],
+    },
+    handler: async (a, ctx) => {
+      const { projectId, ref, files, deletes } = a as {
+        projectId: string;
+        ref?: string;
+        files: Array<{ path: string; content: string }>;
+        deletes?: string[];
+      };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+      if (!project) throw new Error("project not found (use list_projects)");
+      if (!Array.isArray(files) || files.length > MAX_SYNC_FILES) {
+        throw new Error(`files must be an array of at most ${MAX_SYNC_FILES}; sync in batches`);
+      }
+
+      const skipped: Array<{ path: string; reason: string }> = [];
+      let synced = 0;
+      for (const f of files) {
+        if (!f || typeof f.path !== "string" || typeof f.content !== "string") {
+          skipped.push({ path: String(f?.path ?? "?"), reason: "malformed entry" });
+          continue;
+        }
+        if (!isValidRepoPath(f.path)) {
+          skipped.push({ path: f.path, reason: "invalid repo path" });
+          continue;
+        }
+        if (f.content.length > MAX_FILE_CHARS) {
+          skipped.push({ path: f.path, reason: `over ${MAX_FILE_CHARS} chars` });
+          continue;
+        }
+        const path = normalizeRepoPath(f.path);
+        const data = {
+          content: f.content,
+          hash: hashContent(f.content),
+          size: f.content.length,
+          ref: ref ?? null,
+          syncedBy: actor,
+        };
+        await prisma.codeFile.upsert({
+          where: { projectId_path: { projectId, path } },
+          create: { projectId, path, ...data },
+          update: data,
+        });
+        synced++;
+      }
+
+      let deleted = 0;
+      for (const d of deletes ?? []) {
+        if (typeof d !== "string" || !isValidRepoPath(d)) continue;
+        const r = await prisma.codeFile.deleteMany({ where: { projectId, path: normalizeRepoPath(d) } });
+        deleted += r.count;
+      }
+
+      await prisma.auditEvent.create({
+        data: { action: "sync_code", actor, target: projectId, detail: `${synced} synced, ${deleted} deleted${ref ? ` @ ${ref}` : ""}` },
+      });
+      return { synced, deleted, skipped, by: actor };
+    },
+  },
+  {
+    name: "get_code_map",
+    description:
+      "The project's shared code mirror as a tree: every synced file's path, content hash, size, ref, who synced it and when. Diff hashes against your local files to know what changed without reading contents.",
+    inputSchema: { type: "object", properties: { projectId: { type: "string" } }, required: ["projectId"] },
+    handler: async (a) => {
+      const { projectId } = a as { projectId: string };
+      const files = await prisma.codeFile.findMany({
+        where: { projectId },
+        orderBy: { path: "asc" },
+        select: { path: true, hash: true, size: true, ref: true, syncedBy: true, updatedAt: true },
+      });
+      return { projectId, fileCount: files.length, files };
+    },
+  },
+  {
+    name: "read_code",
+    description: "Read one file from the project's shared code mirror (synced by agents via sync_code).",
+    inputSchema: {
+      type: "object",
+      properties: { projectId: { type: "string" }, path: { type: "string" } },
+      required: ["projectId", "path"],
+    },
+    handler: async (a) => {
+      const { projectId, path } = a as { projectId: string; path: string };
+      const file = await prisma.codeFile.findUnique({
+        where: { projectId_path: { projectId, path: normalizeRepoPath(path) } },
+      });
+      if (!file) throw new Error("file not in the mirror (see get_code_map; an agent may need to sync_code it)");
+      return { path: file.path, content: file.content, hash: file.hash, ref: file.ref, syncedBy: file.syncedBy, updatedAt: file.updatedAt };
+    },
+  },
+  {
+    name: "announce_work",
+    description:
+      "Declare what you are about to do and which files you'll touch, so other agents see it in get_active_work before starting overlapping work. Returns any active intents whose paths overlap yours — check them before proceeding. Update status via update_work when you finish.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        intent: { type: "string", description: "what you're doing, one or two sentences" },
+        paths: { type: "array", items: { type: "string" }, description: "repo-relative files you expect to touch" },
+        status: { type: "string", enum: [...WORK_STATUSES], default: "in_progress" },
+        actor: { type: "string", description: "who is working (ignored when authenticated)" },
+      },
+      required: ["projectId", "intent"],
+    },
+    handler: async (a, ctx) => {
+      const { projectId, intent, paths, status } = a as {
+        projectId: string;
+        intent: string;
+        paths?: string[];
+        status?: string;
+      };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+      if (!project) throw new Error("project not found (use list_projects)");
+      if (!intent.trim()) throw new Error("intent required");
+      const st = status && (WORK_STATUSES as readonly string[]).includes(status) ? status : "in_progress";
+      const cleanPaths = (paths ?? []).filter((p) => typeof p === "string" && isValidRepoPath(p)).map(normalizeRepoPath);
+
+      // Conflict signal: active intents (other actors) touching the same paths.
+      const active = await prisma.workIntent.findMany({
+        where: { projectId, status: { in: ["planning", "in_progress"] } },
+      });
+      const overlapping = active
+        .filter((w) => w.actor !== actor)
+        .map((w) => ({ id: w.id, actor: w.actor, intent: w.intent, overlap: pathOverlap(cleanPaths, JSON.parse(w.paths) as string[]) }))
+        .filter((w) => w.overlap.length > 0);
+
+      const created = await prisma.workIntent.create({
+        data: { projectId, actor, intent: intent.trim(), paths: JSON.stringify(cleanPaths), status: st },
+      });
+      await prisma.auditEvent.create({ data: { action: "announce_work", actor, target: projectId, detail: intent.trim().slice(0, 200) } });
+      return {
+        intentId: created.id,
+        status: created.status,
+        by: actor,
+        overlapping,
+        note: overlapping.length
+          ? "CAUTION: other agents are actively working on overlapping files — coordinate before changing them."
+          : "No overlapping active work.",
+      };
+    },
+  },
+  {
+    name: "update_work",
+    description: "Update a work intent's status: planning | in_progress | done | abandoned. Mark done when you finish (and sync_code the changed files so others see the result).",
+    inputSchema: {
+      type: "object",
+      properties: { intentId: { type: "string" }, status: { type: "string", enum: [...WORK_STATUSES] } },
+      required: ["intentId", "status"],
+    },
+    handler: async (a, ctx) => {
+      const { intentId, status } = a as { intentId: string; status: string };
+      if (!(WORK_STATUSES as readonly string[]).includes(status)) {
+        throw new Error(`status must be one of: ${WORK_STATUSES.join(", ")}`);
+      }
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const updated = await prisma.workIntent
+        .update({ where: { id: intentId }, data: { status }, select: { id: true, status: true, intent: true } })
+        .catch(() => null);
+      if (!updated) throw new Error("work intent not found");
+      return { ...updated, by: actor };
+    },
+  },
+  {
+    name: "get_active_work",
+    description:
+      "Who is working on what right now: active (planning/in_progress) work intents with their files, plus recently finished ones. Check before you start editing — and cross-reference get_code_map for the latest synced code.",
+    inputSchema: {
+      type: "object",
+      properties: { projectId: { type: "string", description: "omit for all projects" } },
+    },
+    handler: async (a) => {
+      const { projectId } = a as { projectId?: string };
+      const where = projectId ? { projectId } : {};
+      const [active, recent] = await Promise.all([
+        prisma.workIntent.findMany({
+          where: { ...where, status: { in: ["planning", "in_progress"] } },
+          orderBy: { updatedAt: "desc" },
+          include: { project: { select: { name: true } } },
+        }),
+        prisma.workIntent.findMany({
+          where: { ...where, status: "done" },
+          orderBy: { updatedAt: "desc" },
+          take: 10,
+          include: { project: { select: { name: true } } },
+        }),
+      ]);
+      const shape = (w: (typeof active)[number]) => ({
+        intentId: w.id,
+        project: w.project.name,
+        actor: w.actor,
+        intent: w.intent,
+        paths: JSON.parse(w.paths) as string[],
+        status: w.status,
+        updatedAt: w.updatedAt,
+      });
+      return { active: active.map(shape), recentlyDone: recent.map(shape) };
     },
   },
 ];

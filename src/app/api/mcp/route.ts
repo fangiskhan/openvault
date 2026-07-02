@@ -82,7 +82,7 @@ export async function POST(req: Request) {
         capabilities: { tools: {} },
         serverInfo: { name: "openvault", version: "0.1.0" },
         instructions:
-          "OpenVault shared project state. Read with get_status / get_attention / get_briefing / read_item / search; write with set_status and append_update so other agents see your changes.",
+          "OpenVault shared project state. Read with get_status / get_attention / get_briefing / read_item / search; write with set_status and append_update so other agents see your changes. Code: announce_work before editing (returns overlap warnings), get_active_work to see who's changing what, sync_code your changed files when done, get_code_map / read_code to browse the shared mirror without pulling git.",
       });
 
     case "notifications/initialized":

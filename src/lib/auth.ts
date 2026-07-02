@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import crypto from "node:crypto";
-import { secretsRequired } from "@/lib/security";
+import { secretsRequired } from "./security";
 
 export const SESSION_COOKIE = "ov_session";
 

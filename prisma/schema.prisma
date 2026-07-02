@@ -30,8 +30,50 @@ model Project {
 
   items         Item[]
   files         FileAsset[]
+  codeFiles     CodeFile[]
+  workIntents   WorkIntent[]
   relationsFrom ProjectRelation[] @relation("fromProject")
   relationsTo   ProjectRelation[] @relation("toProject")
+}
+
+// ---- Shared code layer ----
+// A synced snapshot of one source file, pushed by an agent (sync_code) so every
+// other connected agent can browse the project's code over MCP — no repeated
+// git pulls. (projectId, path) is the identity; hash detects staleness.
+model CodeFile {
+  id        String   @id @default(cuid())
+  projectId String
+  path      String // repo-relative, forward slashes, validated (no traversal)
+  content   String
+  hash      String // sha256 of content — cheap change detection via get_code_map
+  size      Int
+  ref       String? // branch/commit label the syncing agent reported
+  syncedBy  String? // username/actor that pushed this version
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, path])
+  @@index([projectId])
+}
+
+// An agent's declared unit of work: "I am changing these files to do X".
+// Other agents see active intents (get_active_work) before touching the same
+// paths — coordination without a human relay or a Git lock.
+model WorkIntent {
+  id        String   @id @default(cuid())
+  projectId String
+  actor     String // who is doing the work (account username or declared agent)
+  intent    String // what they're doing, in one or two sentences
+  paths     String   @default("[]") // JSON array of repo-relative paths being touched
+  status    String   @default("in_progress") // planning | in_progress | done | abandoned
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
 }
 
 // A directed connection between two projects. Connected projects can resolve
@@ -144,7 +186,10 @@ model Account {
   displayName  String?
   role         String    @default("member") // owner | executive | member
   status       String    @default("pending") // pending | approved | revoked
-  token        String    @unique // per-account bearer key for MCP / API identity
+  // SHA-256 of the per-account bearer key. Plaintext is returned exactly once
+  // (at registration / regeneration) and never stored — a leaked DB or backup
+  // yields no working credentials. Null = no usable token (regenerate to issue).
+  tokenHash    String?   @unique
   approvedById String?
   approvedAt   DateTime?
   createdAt    DateTime  @default(now())
@@ -154,7 +199,6 @@ model Account {
   approved   Account[] @relation("approver")
 
   @@index([status])
-  @@index([token])
 }
 
 // Append-only accountability log. NEVER updated or deleted. Records who did what

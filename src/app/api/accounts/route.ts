@@ -8,14 +8,17 @@ export async function POST(req: Request) {
   const data = (await req.json().catch(() => ({}))) as { username?: unknown; displayName?: unknown };
   if (typeof data.username !== "string") return badRequest("username required");
   try {
-    const a = await registerAccount(data.username.trim(), typeof data.displayName === "string" ? data.displayName.trim() : undefined);
+    const { account: a, token } = await registerAccount(
+      data.username.trim(),
+      typeof data.displayName === "string" ? data.displayName.trim() : undefined,
+    );
     return Response.json(
       {
         id: a.id,
         username: a.username,
         status: a.status,
-        token: a.token,
-        note: "Pending approval. Present this token as 'Authorization: Bearer <token>' — it works only once an owner/executive approves you.",
+        token,
+        note: "SAVE THIS TOKEN — it is shown once and stored only as a hash. Present it as 'Authorization: Bearer <token>'; it works only once an owner/executive approves you.",
       },
       { status: 201 },
     );

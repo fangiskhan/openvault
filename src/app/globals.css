@@ -933,6 +933,19 @@ textarea {
 }
 .spx-btn.ghost { background: var(--spx-white); }
 .spx-btn:disabled { opacity: 0.5; cursor: default; }
+.spx-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 3px solid var(--spx-ink);
+  background: var(--spx-white);
+  outline: none;
+}
+.spx-input:focus {
+  box-shadow: 4px 4px 0 0 var(--spx-magenta);
+}
 .spx-audit {
   list-style: none;
   margin: 0;

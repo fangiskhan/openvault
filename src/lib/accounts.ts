@@ -12,6 +12,14 @@ export function newToken(): string {
   return "ovk_" + crypto.randomBytes(24).toString("hex");
 }
 
+// Tokens are stored only as SHA-256 hashes: a stolen DB/backup yields no working
+// credentials. SHA-256 (not bcrypt) is right here — the input is a 192-bit
+// random key, not a human password, so brute force is already infeasible and
+// lookups stay a cheap indexed equality.
+export function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
 // Append-only accountability record. Never updated or deleted.
 async function audit(action: string, actor: string | null, target: string | null, detail?: string) {
   await prisma.auditEvent.create({ data: { action, actor, target, detail: detail ?? null } });
@@ -37,8 +45,10 @@ export async function getOrCreateOwner() {
     await audit("bootstrap_owner_squatted", "system", wanted, `'${wanted}' was already taken; owner created as '${username}'`);
   }
   const owner = await prisma.account.create({
-    data: { username, displayName: "Owner", role: "owner", status: "approved", token: newToken(), approvedAt: new Date() },
+    data: { username, displayName: "Owner", role: "owner", status: "approved", tokenHash: hashToken(newToken()), approvedAt: new Date() },
   });
+  // The bootstrap token is deliberately discarded: the owner authenticates via
+  // APP_PASSWORD or MCP_TOKEN and can mint a personal token with regenerateToken.
   await audit("bootstrap_owner", "system", username);
   return owner;
 }
@@ -47,16 +57,29 @@ export async function registerAccount(username: string, displayName?: string) {
   if (!USERNAME_RE.test(username)) throw new Error("invalid username (2-40 chars: letters, digits, . _ -)");
   if (username.toLowerCase() === ownerUsername().toLowerCase()) throw new Error("that username is reserved");
   if (await prisma.account.findUnique({ where: { username } })) throw new Error("username already taken");
+  const token = newToken();
   const account = await prisma.account.create({
-    data: { username, displayName: displayName || null, role: "member", status: "pending", token: newToken() },
+    data: { username, displayName: displayName || null, role: "member", status: "pending", tokenHash: hashToken(token) },
   });
   await audit("register", username, username, "account requested");
-  return account;
+  // The plaintext token exists only in this return value — show it once, never again.
+  return { account, token };
+}
+
+// Re-issue an account's bearer token (owner/executive action). The old token
+// stops working immediately; the new plaintext is returned exactly once.
+export async function regenerateToken(targetId: string, by: { username: string }) {
+  const target = await prisma.account.findUnique({ where: { id: targetId } });
+  if (!target) throw new Error("account not found");
+  const token = newToken();
+  await prisma.account.update({ where: { id: targetId }, data: { tokenHash: hashToken(token) } });
+  await audit("regenerate_token", by.username, target.username);
+  return { account: target, token };
 }
 
 export function resolveByToken(token: string | null | undefined) {
   if (!token) return Promise.resolve(null);
-  return prisma.account.findUnique({ where: { token } });
+  return prisma.account.findUnique({ where: { tokenHash: hashToken(token) } });
 }
 
 // The acting approver for an HTTP request: an APP_PASSWORD session counts as the

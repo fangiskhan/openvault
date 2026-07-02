@@ -28,6 +28,12 @@ export default function AccountsAdmin() {
   const [audit, setAudit] = useState<Audit[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [inviteUser, setInviteUser] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  // One-time token reveal: { username, token } — tokens are stored hashed, so
+  // this is the only moment the plaintext exists. Copy it or lose it.
+  const [reveal, setReveal] = useState<{ username: string; token: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -66,6 +72,52 @@ export default function AccountsAdmin() {
     }
   };
 
+  const invite = async () => {
+    const username = inviteUser.trim();
+    if (!username) return;
+    setBusy("invite");
+    try {
+      const r = await api("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, displayName: inviteName.trim() || undefined }),
+      });
+      setReveal({ username: r.username, token: r.token });
+      setInviteUser("");
+      setInviteName("");
+      setErr(null);
+      await load();
+    } catch {
+      setErr("Could not create the account — the username may be taken, reserved, or invalid.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const regenerate = async (id: string) => {
+    setBusy(id);
+    try {
+      const r = await api(`/api/accounts/${id}/token`, { method: "POST" });
+      setReveal({ username: r.username, token: r.token });
+      setErr(null);
+    } catch {
+      setErr("Could not regenerate the token — owner/executive access required.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const copyToken = async () => {
+    if (!reveal) return;
+    try {
+      await navigator.clipboard.writeText(reveal.token);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  };
+
   const pending = accounts.filter((a) => a.status === "pending");
   const members = accounts.filter((a) => a.status !== "pending");
   const nameOf = (id: string | null) => (id ? accounts.find((a) => a.id === id)?.username ?? id : "—");
@@ -74,6 +126,49 @@ export default function AccountsAdmin() {
     <div>
       <h2>Access Control</h2>
       {err && <p className="spx-meta" style={{ color: "var(--spx-magenta)" }}>{err}</p>}
+
+      {reveal && (
+        <div className="spx-card" style={{ background: "var(--spx-lime)" }}>
+          <span>
+            <span className="spx-user">{reveal.username}</span>
+            <br />
+            <span className="spx-meta">
+              Token for this account — <b>shown once, stored only as a hash.</b> Copy it now.
+            </span>
+            <br />
+            <code style={{ fontSize: 12, wordBreak: "break-all" }}>{reveal.token}</code>
+          </span>
+          <span className="spx-spacer" />
+          <button className="spx-btn" onClick={copyToken}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button className="spx-btn ghost" onClick={() => setReveal(null)}>
+            Done
+          </button>
+        </div>
+      )}
+
+      <h3>Add a member</h3>
+      <div className="spx-card">
+        <input
+          className="spx-input"
+          placeholder="username (their agent's identity)"
+          value={inviteUser}
+          onChange={(e) => setInviteUser(e.target.value)}
+        />
+        <input
+          className="spx-input"
+          placeholder="display name (optional)"
+          value={inviteName}
+          onChange={(e) => setInviteName(e.target.value)}
+        />
+        <button className="spx-btn" disabled={busy === "invite" || !inviteUser.trim()} onClick={invite}>
+          {busy === "invite" ? "…" : "Create"}
+        </button>
+      </div>
+      <p className="spx-meta">
+        Creates a pending account and reveals its token once — hand both to your teammate, then approve below.
+      </p>
 
       <h3>Pending — {pending.length}</h3>
       {pending.length === 0 && <p className="spx-meta">No accounts awaiting approval.</p>}
@@ -106,6 +201,14 @@ export default function AccountsAdmin() {
             </span>
           </span>
           <span className="spx-spacer" />
+          <button
+            className="spx-btn ghost"
+            disabled={busy === a.id}
+            title="Issue a fresh token (the old one stops working)"
+            onClick={() => regenerate(a.id)}
+          >
+            New Token
+          </button>
           {a.role === "member" && (
             <button className="spx-btn ghost" disabled={busy === a.id} onClick={() => appoint(a.id, "executive")}>
               Make Exec

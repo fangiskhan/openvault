@@ -5,7 +5,7 @@ import { scopeProjectIds } from "../projects";
 import { buildTemplatedBriefing } from "../briefing/templated";
 import { ITEM_STATUSES, CONTENT_TYPES } from "../validation";
 import { approveAccount, setRole } from "../accounts";
-import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
+import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 
 // The authenticated caller, resolved from the MCP bearer token by the route.
 // null = anonymous (only possible in open local/dev mode).
@@ -564,7 +564,7 @@ export const tools: Tool[] = [
 
       // Conflict signal: active intents (other actors) touching the same paths.
       const active = await prisma.workIntent.findMany({
-        where: { projectId, status: { in: ["planning", "in_progress"] } },
+        where: { projectId, status: { in: [...ACTIVE_WORK_STATUSES] } },
       });
       const overlapping = active
         .filter((w) => w.actor !== actor)
@@ -588,7 +588,8 @@ export const tools: Tool[] = [
   },
   {
     name: "update_work",
-    description: "Update a work intent's status: planning | in_progress | done | abandoned. Mark done when you finish (and sync_code the changed files so others see the result).",
+    description:
+      "Update a work intent's status: planning | in_progress | in_review | done | abandoned. When you finish coding, sync_code the changed files and set in_review — an owner/executive then approves it via review_work. Do NOT push to git until your intent is approved (status done, reviewedBy set).",
     inputSchema: {
       type: "object",
       properties: { intentId: { type: "string" }, status: { type: "string", enum: [...WORK_STATUSES] } },
@@ -600,17 +601,69 @@ export const tools: Tool[] = [
         throw new Error(`status must be one of: ${WORK_STATUSES.join(", ")}`);
       }
       const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
-      const updated = await prisma.workIntent
-        .update({ where: { id: intentId }, data: { status }, select: { id: true, status: true, intent: true } })
-        .catch(() => null);
-      if (!updated) throw new Error("work intent not found");
+      const existing = await prisma.workIntent.findUnique({ where: { id: intentId } });
+      if (!existing) throw new Error("work intent not found");
+      // The merge gate: an authenticated member cannot self-approve. Their path
+      // to done runs through in_review + an owner/executive's review_work.
+      // (Owner/executive review with their own authority; open/local mode with
+      // no accounts is unenforced — the gate needs identity to mean anything.)
+      if (status === "done" && ctx?.account && ctx.account.role === "member" && !existing.reviewedBy) {
+        throw new Error("review required: set status in_review and have an owner/executive approve via review_work before marking done");
+      }
+      const updated = await prisma.workIntent.update({
+        where: { id: intentId },
+        data: { status },
+        select: { id: true, status: true, intent: true, reviewedBy: true },
+      });
       return { ...updated, by: actor };
+    },
+  },
+  {
+    name: "review_work",
+    description:
+      "Owner/executive only: review a submitted work intent (status in_review). verdict 'approve' marks it done (the actor may then merge/push to git); 'request_changes' sends it back to in_progress with your note. Read the touched files first via read_code / get_code_map.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        intentId: { type: "string" },
+        verdict: { type: "string", enum: ["approve", "request_changes"] },
+        note: { type: "string", description: "feedback for the actor (required for request_changes)" },
+      },
+      required: ["intentId", "verdict"],
+    },
+    handler: async (a, ctx) => {
+      const approver = requireApprover(ctx);
+      const { intentId, verdict, note } = a as { intentId: string; verdict: string; note?: string };
+      if (verdict !== "approve" && verdict !== "request_changes") throw new Error("verdict must be approve or request_changes");
+      if (verdict === "request_changes" && !note?.trim()) throw new Error("a note is required when requesting changes");
+      const existing = await prisma.workIntent.findUnique({ where: { id: intentId } });
+      if (!existing) throw new Error("work intent not found");
+      const approved = verdict === "approve";
+      const updated = await prisma.workIntent.update({
+        where: { id: intentId },
+        data: {
+          status: approved ? "done" : "in_progress",
+          reviewedBy: approved ? approver.username : null,
+          reviewNote: note?.trim() || null,
+          reviewedAt: new Date(),
+        },
+        select: { id: true, status: true, intent: true, actor: true, reviewedBy: true, reviewNote: true },
+      });
+      await prisma.auditEvent.create({
+        data: { action: approved ? "approve_work" : "request_changes", actor: approver.username, target: existing.actor, detail: existing.intent.slice(0, 200) },
+      });
+      return {
+        ...updated,
+        message: approved
+          ? `Approved — ${existing.actor} may merge/push these changes to git.`
+          : `Changes requested — sent back to ${existing.actor} with your note.`,
+      };
     },
   },
   {
     name: "get_active_work",
     description:
-      "Who is working on what right now: active (planning/in_progress) work intents with their files, plus recently finished ones. Check before you start editing — and cross-reference get_code_map for the latest synced code.",
+      "Who is working on what right now: active (planning/in_progress/in_review) work intents with their files, plus recently finished ones. in_review items are the review queue for owners/executives (review_work). Check before you start editing — and cross-reference get_code_map for the latest synced code.",
     inputSchema: {
       type: "object",
       properties: { projectId: { type: "string", description: "omit for all projects" } },
@@ -620,7 +673,7 @@ export const tools: Tool[] = [
       const where = projectId ? { projectId } : {};
       const [active, recent] = await Promise.all([
         prisma.workIntent.findMany({
-          where: { ...where, status: { in: ["planning", "in_progress"] } },
+          where: { ...where, status: { in: [...ACTIVE_WORK_STATUSES] } },
           orderBy: { updatedAt: "desc" },
           include: { project: { select: { name: true } } },
         }),
@@ -638,9 +691,15 @@ export const tools: Tool[] = [
         intent: w.intent,
         paths: JSON.parse(w.paths) as string[],
         status: w.status,
+        reviewedBy: w.reviewedBy,
+        reviewNote: w.reviewNote,
         updatedAt: w.updatedAt,
       });
-      return { active: active.map(shape), recentlyDone: recent.map(shape) };
+      return {
+        active: active.map(shape),
+        reviewQueue: active.filter((w) => w.status === "in_review").length,
+        recentlyDone: recent.map(shape),
+      };
     },
   },
 ];

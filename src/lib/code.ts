@@ -7,7 +7,10 @@ import crypto from "node:crypto";
 
 export const MAX_SYNC_FILES = 100; // files per sync_code call
 export const MAX_FILE_CHARS = 200_000; // per-file content cap (~200 KB)
-export const WORK_STATUSES = ["planning", "in_progress", "done", "abandoned"] as const;
+export const WORK_STATUSES = ["planning", "in_progress", "in_review", "done", "abandoned"] as const;
+// Statuses that count as "someone is actively on this" for overlap warnings
+// and the active-work board. in_review is still active: the code isn't merged.
+export const ACTIVE_WORK_STATUSES = ["planning", "in_progress", "in_review"] as const;
 
 // A safe repo-relative path: forward slashes, no traversal, no absolute paths,
 // no exotic characters. Windows separators are normalized before validation.

@@ -60,16 +60,21 @@ model CodeFile {
 
 // An agent's declared unit of work: "I am changing these files to do X".
 // Other agents see active intents (get_active_work) before touching the same
-// paths — coordination without a human relay or a Git lock.
+// paths — coordination without a human relay or a Git lock. Finished work is
+// submitted for review (in_review); an owner/executive approves it (done) or
+// requests changes — the merge/push to git happens only after approval.
 model WorkIntent {
-  id        String   @id @default(cuid())
-  projectId String
-  actor     String // who is doing the work (account username or declared agent)
-  intent    String // what they're doing, in one or two sentences
-  paths     String   @default("[]") // JSON array of repo-relative paths being touched
-  status    String   @default("in_progress") // planning | in_progress | done | abandoned
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String    @id @default(cuid())
+  projectId  String
+  actor      String // who is doing the work (account username or declared agent)
+  intent     String // what they're doing, in one or two sentences
+  paths      String    @default("[]") // JSON array of repo-relative paths being touched
+  status     String    @default("in_progress") // planning | in_progress | in_review | done | abandoned
+  reviewedBy String? // owner/executive who approved (null = never reviewed)
+  reviewNote String? // reviewer feedback (esp. on request_changes)
+  reviewedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 

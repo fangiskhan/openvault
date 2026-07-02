@@ -31,7 +31,7 @@ The common thread: **the current status is already in OpenVault, so you read it 
 - **Excel & CSV upload** — parsed into searchable, previewable tables (size-capped, path-safe)
 - **Status & attention** — a deterministic engine flags overdue / blocked / open-risk / due-soon / stale items (each cited to a source), rolls them into a **RAG status** per project and across connected projects, and shows a manual override alongside the computed one
 - **Cited briefing** — a one-screen status summary built only from real items; every line clicks through to its source. Deterministic and **zero-token**.
-- **AI agents over MCP** — 23 tools: agents read status, write updates, share code, and coordinate work (see below)
+- **AI agents over MCP** — 24 tools: agents read status, write updates, share code, and coordinate work (see below)
 - **Shared code mirror + work announcements** — agents push file snapshots and declare intents; other agents browse the code and get conflict warnings before touching the same files
 - **Multi-user accounts** — request → approve → connect, with roles (owner / executive / member), per-account bearer tokens stored **only as SHA-256 hashes** (shown once, regenerate from the UI), and an append-only **audit trail** of every approval, role change, and agent write
 - **Data export** — one click exports a project or the whole vault as JSON; your data stays yours
@@ -56,13 +56,13 @@ claude mcp add --transport http openvault http://localhost:6900/api/mcp \
 
 (Drop the `--header` entirely for open local use with no `MCP_TOKEN` set.)
 
-**Tools (23):**
+**Tools (24):**
 
 | Group | Tools |
 | --- | --- |
 | Read | `list_projects` · `get_status` · `get_attention` · `get_briefing` · `search` · `read_item` · `get_inbox` |
 | Write (attributed) | `set_status` · `append_update` · `flag_issue` (cross-project blocker) · `request_info` |
-| **Code & coordination** | `announce_work` · `get_active_work` · `update_work` · `sync_code` · `get_code_map` · `read_code` |
+| **Code & coordination** | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
 | Identity & admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |
 
 **Two ways content gets in:**
@@ -79,11 +79,12 @@ The problem: you connect *your* agent, your colleague connects *theirs*, and eac
 OpenVault gives every project a **code mirror** and a **work board** over MCP:
 
 1. **Before editing** — `announce_work {intent, paths}`: declares what you're doing and which files. The response includes any **active intents from other agents touching the same paths** — a named conflict warning, before the conflict exists.
-2. **See the room** — `get_active_work`: who is working on what, right now, per project.
-3. **After editing** — `sync_code {files}`: push the changed files into the mirror (only what changed — diff against `get_code_map` hashes), then `update_work {status: "done"}`.
-4. **Read without pulling** — any agent calls `get_code_map` (tree + hashes + who synced what, when) and `read_code` (one file) to see the current code — no git pull, no GitHub round-trip.
+2. **See the room** — `get_active_work`: who is working on what, right now, per project — including the review queue.
+3. **After editing** — `sync_code {files}`: push the changed files into the mirror (only what changed — diff against `get_code_map` hashes), then `update_work {status: "in_review"}`.
+4. **The merge gate** — an **owner/executive** reads the synced files (`read_code`) and calls `review_work`: **approve** marks the work done — the actor merges/pushes to git; **request_changes** sends it back with a note. An authenticated member *cannot* mark their own work done — the gate is enforced, not aspirational.
+5. **Read without pulling** — any agent calls `get_code_map` (tree + hashes + who synced what, when) and `read_code` (one file) to see the current code — no git pull, no GitHub round-trip.
 
-Everything is attributed (authenticated account or declared actor) and audit-logged. Paths are validated (no traversal), files capped at 200k chars, 100 per sync.
+Everything is attributed (authenticated account or declared actor) and audit-logged. Paths are validated (no traversal), files capped at 200k chars, 100 per sync. **OpenVault gates the push; git performs it** — the server never holds your GitHub credentials, it holds the *decision* (who approved what, when).
 
 ## Accounts & roles — the team walkthrough
 

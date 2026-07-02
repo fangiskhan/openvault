@@ -13,7 +13,8 @@ OpenVault holds your projects' notes, status, risks, session history, and codeba
 
 - **Read:** `list_projects`, `get_status`, `get_attention`, `get_briefing`, `search`, `read_item`, `get_inbox`
 - **Write** (attributed — always pass `actor: "claude-code"`): `set_status`, `append_update`, `flag_issue`
-- **Code & coordination:** `announce_work` (declare intent + paths before editing; returns overlap warnings), `get_active_work` (who's working on what), `update_work`, `sync_code` (push changed files), `get_code_map`, `read_code` (browse the shared code mirror without pulling git)
+- **Code & coordination:** `announce_work` (declare intent + paths before editing; returns overlap warnings), `get_active_work` (who's working on what + the review queue), `update_work` (finish with `status: "in_review"`), `sync_code` (push changed files), `get_code_map`, `read_code` (browse the shared code mirror without pulling git)
+- **Review gate (owner/executive):** `review_work` `{intentId, verdict: "approve" | "request_changes", note}` — approve marks the work done (the actor may then push to git); request_changes sends it back with feedback. Members cannot mark their own work done.
 
 If these tools are not available in the session, OpenVault isn't connected. Tell the user to run:
 

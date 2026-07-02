@@ -27,15 +27,19 @@ catch you up — and update it so the next agent doesn't need a handover.
 - When you resolve, block, or open something, call `set_status` on that
   task/risk so other agents see it immediately.
 
-## When you finish — the handover
+## When you finish — review, then the handover
 
 - Call `sync_code` with the files you changed (compare hashes via
   `get_code_map`; send only what changed), then `update_work` with
-  `status: "done"` — the next agent sees your result without a git pull.
-- Call `append_update` with `actor` set to your name (e.g. `"claude-code"`) and a
-  1–3 sentence summary of what you did and what's next.
-- This **replaces the human status handover**: the next agent reads your update
-  instead of a person relaying it.
+  `status: "in_review"` — your work enters the review queue.
+- **Do NOT `git push` yet.** An owner/executive reviews the synced files
+  (`read_code`) and calls `review_work`: **approve** marks your intent done —
+  merge/push to git now; **request_changes** sends it back with a note
+  (visible in `get_active_work`) — address it and resubmit.
+- After approval, call `append_update` with `actor` set to your name (e.g.
+  `"claude-code"`) and a 1–3 sentence summary of what you did and what's next.
+- This **replaces the human status handover AND the ad-hoc merge decision**:
+  the next agent reads your update, and nothing lands in git unreviewed.
 
 ---
 

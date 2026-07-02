@@ -11,8 +11,9 @@ OpenVault holds your projects' notes, status, risks, session history, and codeba
 
 ## Tools (from the `openvault` MCP server)
 
-- **Read:** `list_projects`, `get_status`, `get_attention`, `get_briefing`, `search`, `read_item`
-- **Write** (attributed — always pass `actor: "claude-code"`): `set_status`, `append_update`
+- **Read:** `list_projects`, `get_status`, `get_attention`, `get_briefing`, `search`, `read_item`, `get_inbox`
+- **Write** (attributed — always pass `actor: "claude-code"`): `set_status`, `append_update`, `flag_issue`
+- **Code & coordination:** `announce_work` (declare intent + paths before editing; returns overlap warnings), `get_active_work` (who's working on what), `update_work`, `sync_code` (push changed files), `get_code_map`, `read_code` (browse the shared code mirror without pulling git)
 
 If these tools are not available in the session, OpenVault isn't connected. Tell the user to run:
 

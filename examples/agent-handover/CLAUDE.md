@@ -11,6 +11,16 @@ catch you up — and update it so the next agent doesn't need a handover.
 - Call `get_status` and `get_attention` (with the project id above) to load the
   current state and what needs attention **before** you change anything.
 - Use `get_briefing` for the full picture; `search` / `read_item` for detail.
+- **Check `get_active_work`** — another agent may already be editing the files
+  you're about to touch.
+
+## Before you edit code
+
+- Call `announce_work` with your `intent` and the `paths` you expect to change.
+  If the response lists overlapping active intents, coordinate (or pick
+  different work) instead of colliding.
+- Need to see the current code without pulling git? `get_code_map` (tree +
+  hashes) and `read_code` (one file) serve the latest synced mirror.
 
 ## While you work
 
@@ -19,6 +29,9 @@ catch you up — and update it so the next agent doesn't need a handover.
 
 ## When you finish — the handover
 
+- Call `sync_code` with the files you changed (compare hashes via
+  `get_code_map`; send only what changed), then `update_work` with
+  `status: "done"` — the next agent sees your result without a git pull.
 - Call `append_update` with `actor` set to your name (e.g. `"claude-code"`) and a
   1–3 sentence summary of what you did and what's next.
 - This **replaces the human status handover**: the next agent reads your update

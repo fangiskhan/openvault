@@ -85,7 +85,8 @@ export default function AppShell() {
   const [title, setTitle] = useState("");
   const [bodyDraft, setBodyDraft] = useState("");
   const [mode, setMode] = useState<"read" | "edit">("read");
-  const [save, setSave] = useState<"idle" | "saving" | "saved">("idle");
+  const [save, setSave] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [toast, setToast] = useState<string | null>(null);
   const [scope, setScope] = useState("project");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
@@ -114,6 +115,15 @@ export default function AppShell() {
     setOrigin(window.location.origin);
   }, []);
 
+  // Surface failures instead of swallowing them — a failed mutation must never
+  // look identical to success in a source-of-truth tool.
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notify = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 4000);
+  }, []);
+
   const copy = useCallback(async (text: string, key: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -140,7 +150,8 @@ export default function AppShell() {
       });
       setSave("saved");
     } catch {
-      setSave("idle");
+      dirty.current = true; // still unsaved — keep the edit and let the user retry
+      setSave("error");
     }
   }, []);
 
@@ -217,7 +228,7 @@ export default function AppShell() {
           d ? { ...d, items: d.items.map((x) => (x.id === item.id ? { ...x, title: updated.title } : x)) } : d,
         );
       } catch {
-        setSave("idle");
+        setSave("error"); // dirty stays true — "Unsaved" indicator offers retry
       }
     }, 700);
     return () => {
@@ -273,59 +284,111 @@ export default function AppShell() {
   const patchItem = useCallback(
     async (patch: Record<string, unknown>) => {
       if (!item) return;
-      await api(`/api/items/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      const fresh: ItemFull = await api(`/api/items/${item.id}`);
-      setItem(fresh);
-      setTitle(fresh.title);
-      await loadDetail(item.projectId);
+      try {
+        await api(`/api/items/${item.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        const fresh: ItemFull = await api(`/api/items/${item.id}`);
+        setItem(fresh);
+        setTitle(fresh.title);
+        await loadDetail(item.projectId);
+      } catch {
+        notify("Couldn't update the note — change not saved.");
+      }
     },
-    [item, loadDetail],
+    [item, loadDetail, notify],
   );
 
   const newNote = useCallback(async () => {
     if (!activeProjectId) return;
-    const created = await api("/api/items", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: activeProjectId, title: "Untitled", body: "" }),
-    });
-    await loadDetail(activeProjectId);
-    await openItem(created.id);
-    setMode("edit");
-  }, [activeProjectId, loadDetail, openItem]);
+    try {
+      const created = await api("/api/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: activeProjectId, title: "Untitled", body: "" }),
+      });
+      await loadDetail(activeProjectId);
+      await openItem(created.id);
+      setMode("edit");
+    } catch {
+      notify("Couldn't create the note.");
+    }
+  }, [activeProjectId, loadDetail, openItem, notify]);
 
   const newProject = useCallback(async () => {
     const name = window.prompt("Project name");
     if (!name) return;
-    const p = await api("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    await loadProjects();
-    await selectProject(p.id);
-  }, [loadProjects, selectProject]);
+    try {
+      const p = await api("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      await loadProjects();
+      await selectProject(p.id);
+    } catch {
+      notify("Couldn't create the project — the name may already be taken.");
+    }
+  }, [loadProjects, selectProject, notify]);
 
   const loadDemo = useCallback(async () => {
-    await api("/api/demo", { method: "POST" });
-    const ps = await loadProjects();
-    if (ps.length) await selectProject(ps[0].id);
-  }, [loadProjects, selectProject]);
+    try {
+      await api("/api/demo", { method: "POST" });
+      const ps = await loadProjects();
+      if (ps.length) await selectProject(ps[0].id);
+    } catch {
+      notify("Couldn't load demo data — it only loads into an empty vault.");
+    }
+  }, [loadProjects, selectProject, notify]);
+
+  const renameProject = useCallback(async () => {
+    if (!activeProjectId || !detail) return;
+    const name = window.prompt("Rename project", detail.name);
+    if (!name || name === detail.name) return;
+    try {
+      await api(`/api/projects/${activeProjectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      await loadProjects();
+      await loadDetail(activeProjectId);
+    } catch {
+      notify("Couldn't rename the project.");
+    }
+  }, [activeProjectId, detail, loadProjects, loadDetail, notify]);
+
+  const deleteProject = useCallback(async () => {
+    if (!activeProjectId || !detail) return;
+    if (!window.confirm(`Delete project “${detail.name}” and ALL its notes? This cannot be undone.`)) return;
+    try {
+      await api(`/api/projects/${activeProjectId}`, { method: "DELETE" });
+      setItem(null);
+      setDetail(null);
+      setActiveProjectId(null);
+      const ps = await loadProjects();
+      if (ps.length) await selectProject(ps[0].id);
+    } catch {
+      notify("Couldn't delete the project.");
+    }
+  }, [activeProjectId, detail, loadProjects, selectProject, notify]);
 
   const deleteItem = useCallback(async () => {
     if (!item) return;
     if (!window.confirm(`Delete “${item.title}”?`)) return;
     dirty.current = false; // discarding — don't let a pending flush revive it
     const pid = item.projectId;
-    await api(`/api/items/${item.id}`, { method: "DELETE" });
-    setItem(null);
-    const d = await loadDetail(pid);
-    if (d.items.length) openItem(d.items[0].id);
-  }, [item, loadDetail, openItem]);
+    try {
+      await api(`/api/items/${item.id}`, { method: "DELETE" });
+      setItem(null);
+      const d = await loadDetail(pid);
+      if (d.items.length) openItem(d.items[0].id);
+    } catch {
+      notify("Couldn't delete the note.");
+    }
+  }, [item, loadDetail, openItem, notify]);
 
   const openByTitle = useCallback(
     async (t: string) => {
@@ -359,36 +422,48 @@ export default function AppShell() {
   const connect = useCallback(
     async (toId: string) => {
       if (!activeProjectId) return;
-      await api(`/api/projects/${activeProjectId}/connections`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toProjectId: toId }),
-      });
-      await loadDetail(activeProjectId);
+      try {
+        await api(`/api/projects/${activeProjectId}/connections`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ toProjectId: toId }),
+        });
+        await loadDetail(activeProjectId);
+      } catch {
+        notify("Couldn't connect the projects.");
+      }
     },
-    [activeProjectId, loadDetail],
+    [activeProjectId, loadDetail, notify],
   );
 
   const disconnect = useCallback(
     async (toId: string) => {
       if (!activeProjectId) return;
-      await api(`/api/projects/${activeProjectId}/connections?to=${toId}`, { method: "DELETE" });
-      await loadDetail(activeProjectId);
+      try {
+        await api(`/api/projects/${activeProjectId}/connections?to=${toId}`, { method: "DELETE" });
+        await loadDetail(activeProjectId);
+      } catch {
+        notify("Couldn't disconnect the projects.");
+      }
     },
-    [activeProjectId, loadDetail],
+    [activeProjectId, loadDetail, notify],
   );
 
   const onUpload = useCallback(
     async (file: File) => {
       if (!activeProjectId) return;
-      const fd = new FormData();
-      fd.set("file", file);
-      fd.set("projectId", activeProjectId);
-      const created = await api("/api/upload", { method: "POST", body: fd });
-      await loadDetail(activeProjectId);
-      await openItem(created.id);
+      try {
+        const fd = new FormData();
+        fd.set("file", file);
+        fd.set("projectId", activeProjectId);
+        const created = await api("/api/upload", { method: "POST", body: fd });
+        await loadDetail(activeProjectId);
+        await openItem(created.id);
+      } catch {
+        notify("Upload failed — files must be under 25 MB.");
+      }
     },
-    [activeProjectId, loadDetail, openItem],
+    [activeProjectId, loadDetail, openItem, notify],
   );
 
   const connectable = projects.filter(
@@ -418,6 +493,22 @@ export default function AppShell() {
             placeholder="Search…  (⌘K)"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setQuery("");
+                setResults(null);
+                searchRef.current?.blur();
+              } else if (e.key === "Enter" && results?.length) {
+                const first = results[0];
+                setQuery("");
+                setResults(null);
+                openItem(first.id);
+              }
+            }}
+            onBlur={() => {
+              // Let a click on a result land before the dropdown unmounts.
+              setTimeout(() => setResults(null), 150);
+            }}
           />
           {results && (
             <div className="search-results">
@@ -496,9 +587,14 @@ export default function AppShell() {
         <aside className="sidebar">
           <div className="section-label">
             Projects
-            <button className="btn-ghost" style={{ padding: "0 6px" }} onClick={newProject}>
-              +
-            </button>
+            <span>
+              <a className="btn-ghost" style={{ padding: "0 6px", textDecoration: "none" }} href="/api/export" title="Export whole vault (JSON)">
+                ⤓
+              </a>
+              <button className="btn-ghost" style={{ padding: "0 6px" }} onClick={newProject}>
+                +
+              </button>
+            </span>
           </div>
           {projects.map((p) => (
             <button
@@ -514,7 +610,25 @@ export default function AppShell() {
 
           {detail && (
             <>
-              <div className="section-label">Notes</div>
+              <div className="section-label">
+                Notes
+                <span title={`Manage “${detail.name}”`}>
+                  <button className="btn-ghost" style={{ padding: "0 5px" }} onClick={renameProject} title="Rename project">
+                    ✎
+                  </button>
+                  <a
+                    className="btn-ghost"
+                    style={{ padding: "0 5px", textDecoration: "none" }}
+                    href={`/api/export?projectId=${detail.id}`}
+                    title="Export this project (JSON)"
+                  >
+                    ⤓
+                  </a>
+                  <button className="btn-ghost" style={{ padding: "0 5px" }} onClick={deleteProject} title="Delete project">
+                    ✕
+                  </button>
+                </span>
+              </div>
               {detail.items.length === 0 && (
                 <p className="empty" style={{ padding: "4px 8px" }}>
                   No notes yet.
@@ -619,7 +733,13 @@ export default function AppShell() {
                 {save !== "idle" && (
                   <>
                     <span>·</span>
-                    <span>{save === "saving" ? "Saving…" : "Saved"}</span>
+                    {save === "error" ? (
+                      <button className="save-retry" onClick={flushSave} title="Save failed — click to retry">
+                        Unsaved — retry
+                      </button>
+                    ) : (
+                      <span>{save === "saving" ? "Saving…" : "Saved"}</span>
+                    )}
                   </>
                 )}
                 <div className="spacer" />
@@ -781,6 +901,12 @@ export default function AppShell() {
           <div className="spx" onClick={(e) => e.stopPropagation()}>
             <AccountsAdmin />
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="toast" role="alert" onClick={() => setToast(null)}>
+          {toast}
         </div>
       )}
 

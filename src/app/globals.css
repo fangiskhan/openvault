@@ -695,6 +695,36 @@ textarea {
   white-space: nowrap;
 }
 
+/* ---------- toast + save-retry ---------- */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  max-width: min(560px, 90vw);
+  background: var(--ink);
+  color: var(--bg);
+  border: 3px solid var(--danger);
+  box-shadow: 6px 6px 0 0 var(--danger);
+  padding: 10px 16px;
+  font-family: var(--mono);
+  font-size: 13px;
+  cursor: pointer;
+}
+.save-retry {
+  background: var(--danger);
+  color: #fff;
+  border: 2px solid var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.save-retry:hover {
+  background: var(--ink);
+}
+
 /* ---------- login ---------- */
 .login-wrap {
   height: 100vh;

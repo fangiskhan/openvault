@@ -1,135 +1,116 @@
 # OpenVault
 
-**The shared source of truth your AI agents read *and write* — so nobody (and no agent) has to relay status again.**
+A self-hosted project hub that your team and its AI agents share over MCP. An agent records a status, raises a blocker, or logs what it finished. The next agent, on another machine in another repo, reads that record and acts on it. Nobody relays anything.
 
-OpenVault is a self-hosted project brain your team and its AI agents share over **MCP**. One agent records a status, raises a blocker, or logs what it just did; the next agent — on a different machine, in a different repo — reads it and acts. No standup, no handoff, no human in the middle.
+A concrete run: your agent finishes a task and files a cross-project blocker. Your colleague's agent starts cold an hour later, calls `get_attention`, sees the blocker with the error text and the project it belongs to, and picks it up. You and your colleague never spoke.
 
-> **The 30-second version:** Agent A finishes a task and writes a cross-project blocker to OpenVault over MCP. Agent B, starting cold, calls `get_attention` and instantly sees it — with the error and where the fix belongs — and acts on it. They stayed coordinated because the truth is *shared*, not *relayed*.
+Notes, tasks, risks, meeting minutes and spreadsheets live inside projects. Connect two projects and wikilinks, search and the graph cross the boundary. Each project also carries a code mirror and a work board, so agents read current code and see each other's in-flight changes without pulling GitHub. Run it on your own machine, your own server, or Vercel. Your data stays where you put it.
 
-Notes, tasks, risks, meeting minutes and spreadsheets live inside **projects** that can be **connected**, so wikilinks, search and a cross-project graph cross the boundary. Agents additionally share a **code mirror** and **work announcements** per project — each agent sees the project's code and what every other agent is doing to it, without pulling GitHub between steps. Run it on your own machine, your own server, or Vercel — your data stays where you put it.
+Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 30 MCP tools for reading and writing state, code, and coordination. 56 automated tests cover the rules engine, the similarity engine, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
 
-> **Maturity: working v1.** The core loop — projects, status, cited briefings, **multi-user accounts + roles + approval with hashed per-account tokens**, an append-only **audit trail**, JSON **export**, and agents reading *and writing* shared state **and code** over MCP — works and is verified by unit tests + live MCP checks. **Live integrations (Jira/Slack/Notion), private-vs-shared drafts, and realtime push are on the roadmap.** See [Status & roadmap](#status--roadmap).
+## Who uses it
 
----
+- Consultants: one project per client engagement, with its meetings, decisions, risks and status in one place. Self-host so client data never leaves your infrastructure.
+- Finance teams: track deal workstreams, drop in Excel models (parsed and searchable), keep a RAG status per project.
+- Project managers: upload meeting minutes, read a one-screen briefing instead of pinging five people.
+- Developers running agents: Claude Code, Cursor and Codex read project status and code, announce what they plan to change, and write back what they did. The next session starts informed.
 
-## Who it's for
+## What works today
 
-Not just developers — anyone who needs **current project information without asking around**:
+- Projects with connections; rename, export and delete from the sidebar
+- Markdown notes with `[[wikilinks]]`, backlinks, and a graph view
+- Search scoped to one project, connected projects, or the whole vault
+- Excel and CSV upload, parsed into searchable tables
+- A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status
+- A one-screen briefing built from real items; each line links to its source
+- 30 MCP tools (table below)
+- Inferred connections: the Related rail and `suggest_links` surface notes that share content but were never linked; `find_project_bridges` scores which projects share concepts; the graph groups notes into topic clusters. Each suggestion lists the terms behind it.
+- A code mirror and work board per project, with conflict warnings before two agents touch the same file
+- Accounts with owner, executive and member roles; tokens stored as SHA-256 hashes and shown once; per-account web login; an audit trail of approvals, role changes, logins and agent writes
+- A Code tab where owners and executives approve or reject in-review work
+- `POST /api/ingest` for webhooks (Jira automation, Slack workflows, GitHub Actions, Zapier); a repeated `sourceRef` updates its item instead of duplicating it
+- Rate limits on sign-in, registration, MCP and ingest; `npm run db:backup` writes timestamped JSON snapshots
+- First-run onboarding: create a project, load demo data, or connect an agent
 
-- **Consultants** — keep each client engagement a separate project, with its meeting notes, decisions, risks, and status in one place; connect related engagements to share context; self-host so client data never leaves your control.
-- **Investment banking / finance** — track deal and project workstreams, drop in Excel models (parsed and searchable), keep a clean RAG status per project, and run it on infrastructure you control for security and compliance.
-- **Office workers & project managers** — upload meeting minutes, see what needs attention, and read a one-screen status briefing instead of pinging five people.
-- **Developers & their AI agents** — Claude Code / Cursor / Codex read the project's status *and code*, announce what they're about to change, and write back what they did — so the next session (human or agent) starts informed.
+## Status and briefings
 
-The common thread: **the current status is already in OpenVault, so you read it instead of reconstructing it.**
+The Status tab shows a RAG headline, per-project health, an attention board where each row cites the item that triggered it, and recent decisions and updates. The computed health sits next to your manual override; when they disagree, the UI flags the divergence instead of hiding it.
 
-## What works today (v1)
+The briefing is templated and deterministic: rules over your items, no model calls, no inference server. Your connected agent supplies the prose. Ask Claude Code to narrate `get_briefing` and you get a written, cited summary for the cost of your own agent's tokens.
 
-- **Projects** with cross-project **connections** — undirected links that let wikilinks and search cross over; rename / export / delete from the sidebar
-- **Notes** in markdown with `[[wikilinks]]`, backlinks, and an optional graph
-- **Scoped search** — this project / connected / all (Esc closes, Enter opens the top hit)
-- **Excel & CSV upload** — parsed into searchable, previewable tables (size-capped, path-safe)
-- **Status & attention** — a deterministic engine flags overdue / blocked / open-risk / due-soon / stale items (each cited to a source), rolls them into a **RAG status** per project and across connected projects, and shows a manual override alongside the computed one
-- **Cited briefing** — a one-screen status summary built only from real items; every line clicks through to its source. Deterministic and **zero-token**.
-- **AI agents over MCP** — 30 tools: agents read status, write updates, traverse the knowledge graph, share code, and coordinate work (see below)
-- **Inferred connections** — content similarity surfaces notes that belong together but were never linked (the "Related" rail + `suggest_links`), project pairs that share concepts before anyone connects them (`find_project_bridges`), and emergent topic clusters in the graph — every suggestion explained by the shared terms that drive it
-- **Shared code mirror + work announcements** — agents push file snapshots and declare intents; other agents browse the code and get conflict warnings before touching the same files
-- **Multi-user accounts** — request → approve → connect, with roles (owner / executive / member), per-account bearer tokens stored **only as SHA-256 hashes** (shown once, regenerate from the UI), **per-account web login** (username + token; sessions carry that account's authority, never more), and an append-only **audit trail** of every approval, role change, login, and agent write
-- **Code tab** — humans browse the agent-synced code mirror and the live work board; owners/executives approve or request changes on in-review work right from the UI
-- **Webhook ingest** — `POST /api/ingest` lets Jira automation / Slack workflows / GitHub Actions / Zapier push items in; same `sourceRef` updates instead of duplicating
-- **Ops** — brute-force rate limiting on auth/registration/MCP, and `npm run db:backup` for timestamped full-vault JSON snapshots (cron/Task Scheduler-ready)
-- **Data export** — one click exports a project or the whole vault as JSON; your data stays yours
-- **First-run onboarding** — empty vault offers *Create project / Load demo data / Connect an agent* (with the ready-to-paste MCP command and copyable project IDs)
+## Connect an agent
 
-## Status & briefings
-
-Open the **Status** tab: a RAG headline, per-project health (computed vs. your manual override, with a divergence flag), an **attention board** of what needs looking at — each row citing the item it came from — plus recent decisions and updates. This is the "kill the status meeting" use case: the briefing is drafted from what the team already wrote, and it shows its work.
-
-> The briefing is **deterministic / templated** (rules over your items — no AI, no cost) *by design*: your connected agent **is** the model. Ask Claude Code/Cursor to narrate `get_briefing` output and you get the AI-written version, grounded and cited, with zero server-side inference to host.
-
-## AI agents — shared state, no handover (MCP)
-
-OpenVault exposes an MCP endpoint at `/api/mcp` so AI agents read and write the **same** project state. This is the heart of the product: one agent records a status change, the next agent reads it — no human relaying anything.
-
-Connect Claude Code (or use the in-app **Connect agent** button, which fills all this in for you):
+The in-app Connect agent button fills this in for you, or run:
 
 ```bash
 claude mcp add --transport http openvault http://localhost:6900/api/mcp \
   --header "Authorization: Bearer <your ovk_ account token or MCP_TOKEN>"
 ```
 
-(Drop the `--header` entirely for open local use with no `MCP_TOKEN` set.)
-
-**Tools (30):**
+Drop the `--header` for open local use with no `MCP_TOKEN` set.
 
 | Group | Tools |
 | --- | --- |
 | Read | `list_projects` · `get_status` · `get_attention` · `get_briefing` · `get_recent_activity` · `search` · `read_item` · `get_inbox` |
-| Knowledge graph | `get_graph` (nodes + edges + most-connected concepts + emergent topic clusters) · `get_links` (one note's neighborhood) · `find_path` (shortest wikilink chain between two notes) · `suggest_links` (notes that belong together but were never linked, each explained by shared terms) · `find_project_bridges` (which projects share concepts — before anyone connects them) |
-| Write (attributed) | `set_status` · `append_update` · `flag_issue` (cross-project blocker) · `request_info` |
-| **Code & coordination** | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
-| Identity & admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |
+| Knowledge graph | `get_graph` · `get_links` · `find_path` · `suggest_links` · `find_project_bridges` |
+| Write (attributed) | `set_status` · `append_update` · `flag_issue` · `request_info` |
+| Code and coordination | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
+| Identity and admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |
 
-**Two ways content gets in:**
+Humans add content through the Upload and New note buttons. Agents never touch those; they read and write over MCP.
 
-- **Humans** use the **Upload / New note** buttons (meeting minutes, docs, Excel). Optional.
-- **Agents** never touch those buttons — they read and write over MCP, automatically.
+## How agents share code
 
-**Automatic handover:** drop [`examples/agent-handover/CLAUDE.md`](examples/agent-handover/CLAUDE.md) into your repo and set the project id. Every Claude Code / Cursor session then loads status at the start and logs a handover (`append_update` + `set_status`) at the end — the next agent reads it instead of a person relaying status.
+You connect your agent. Your colleague connects theirs. Without a shared layer, each one re-pulls GitHub to see the code and neither knows the other is editing the same file.
 
-## Agents share code — and see each other coming
+With the vault:
 
-The problem: you connect *your* agent, your colleague connects *theirs*, and each one works blind — re-pulling GitHub to see the code, unaware the other is editing the same file right now.
+1. Before editing, an agent calls `announce_work` with its intent and the file paths. The response lists any active intents from other agents that touch the same paths, by name.
+2. `get_active_work` shows who is working on what across the project, including the review queue.
+3. After editing, the agent calls `sync_code` with the changed files (it diffs against `get_code_map` hashes first) and sets its intent to `in_review`.
+4. An owner or executive reads the synced files and calls `review_work`. Approval marks the work done and clears the actor to push to git. Request-changes sends it back with a note. A member cannot mark their own work done; the server rejects the attempt.
+5. Any agent reads current code through `get_code_map` and `read_code` without a git pull.
 
-OpenVault gives every project a **code mirror** and a **work board** over MCP:
+Each write carries the account or declared actor and lands in the audit log. Paths are validated against traversal; files cap at 200k characters, 100 per sync. The vault holds the merge decision and its provenance. Git performs the merge, and the server never holds your GitHub credentials.
 
-1. **Before editing** — `announce_work {intent, paths}`: declares what you're doing and which files. The response includes any **active intents from other agents touching the same paths** — a named conflict warning, before the conflict exists.
-2. **See the room** — `get_active_work`: who is working on what, right now, per project — including the review queue.
-3. **After editing** — `sync_code {files}`: push the changed files into the mirror (only what changed — diff against `get_code_map` hashes), then `update_work {status: "in_review"}`.
-4. **The merge gate** — an **owner/executive** reads the synced files (`read_code`) and calls `review_work`: **approve** marks the work done — the actor merges/pushes to git; **request_changes** sends it back with a note. An authenticated member *cannot* mark their own work done — the gate is enforced, not aspirational.
-5. **Read without pulling** — any agent calls `get_code_map` (tree + hashes + who synced what, when) and `read_code` (one file) to see the current code — no git pull, no GitHub round-trip.
+## The daily loop
 
-Everything is attributed (authenticated account or declared actor) and audit-logged. Paths are validated (no traversal), files capped at 200k chars, 100 per sync. **OpenVault gates the push; git performs it** — the server never holds your GitHub credentials, it holds the *decision* (who approved what, when).
+Download three files per project from the Connect agent modal and the loop runs without anyone remembering it:
 
-## The daily loop — zero-effort by design
+- `CLAUDE.md` (repo root) tells each agent session to read state first, announce before editing, sync and submit for review after, and log a handover.
+- A `.claude/settings.json` hook curls `GET /api/brief/<projectId>` at session start. The plain-text briefing (headline, attention, active work, recent changes) lands in the session's context before you type. The same `curl` works on Windows and unix.
+- A `post-commit` git hook syncs each commit's changed files into the code mirror, attributed to `post-commit-hook`.
 
-Daily-use tools win on friction, not features. OpenVault's loop costs the developer **nothing** once two files are in the repo (download them per-project from the **Connect agent** modal):
+For "what did everyone's agents do since yesterday", `get_recent_activity` returns each item, work intent and audit action from the last N hours, grouped and attributed.
 
-- **`CLAUDE.md`** (repo root) — teaches every agent session the full loop: read state → check active work → announce → work → sync → submit for review → hand over.
-- **`.claude/settings.json` hooks** — a `SessionStart` hook that curls `GET /api/brief/<projectId>`: a **plain-text** briefing (headline, attention, active work, recent changes) injected straight into the session's context. Every session starts already knowing the project — zero tool calls, zero tokens spent querying, no JSON escaping in the hook command, same `curl` on Windows and unix.
-- **`post-commit` git hook** — every commit auto-syncs its changed files into the code mirror (`sync_code`, attributed to `post-commit-hook`), so other agents always browse current code even when nobody remembers to sync.
+## Token cost, measured
 
-And the "coffee question" — *what did everyone's agents do since yesterday?* — is one call: `get_recent_activity` returns every item, work intent, and audit action from the last N hours, attributed and grouped. Ask your agent "what happened in the vault yesterday?" and it answers from data, not memory.
+Numbers from this repo's own vault (89 mirrored files, ~180 notes):
 
-## Token economics — query a small graph instead of re-reading big files
-
-| Instead of… | The agent does… | Saving |
+| Question | Without the vault | With the vault |
 | --- | --- | --- |
-| Re-exploring the repo/history every cold start (20–50k tokens) | Reads the ~400-token briefing the SessionStart hook injected | The big one — every session |
-| Re-reading files to learn "what changed since yesterday" | `get_recent_activity` — one compact, attributed digest | 10–100× on that question |
-| Pulling and grepping a teammate's repo | `get_code_map` (paths + hashes only) → `read_code` for the one file needed | Reads 1 file instead of 20 |
-| Scrolling old transcripts for "what did we decide about X" | `search` / `read_item` → one short cited note | Grows with your history |
-| Reading many notes to find the relevant one | `topLinked` / `get_links` / `find_path` — navigate the graph, then read one | Same pattern as graph-based code tools |
+| What's the state of this project? | Re-explore the repo and history each cold start (est. 20-50k tokens) | 336-token briefing, injected by the hook |
+| What changed in the code? | Pull and read files | `get_code_map`: 6,010 tokens vs 83,106 to read the mirror's contents. 14x cheaper. |
+| What happened this week? | Scroll transcripts | 7-day `get_recent_activity` digest: 1,253 tokens |
+| What did we decide about X? | Re-read history | One `search` plus one cited note |
 
-Measured on this repo's own vault (89 mirrored files, ~180 notes): the injected briefing is **~340 tokens**; `get_code_map` is **~6k tokens vs ~83k** for reading the mirror's contents (**14× cheaper** to learn what changed); a full 7-day `get_recent_activity` digest is **~1.3k tokens**. The cold-start comparison ("20–50k tokens of re-exploration") is an estimate, not a benchmark — instrumented side-by-side agent sessions are future work.
+The briefing costs zero LLM tokens to produce (templated rules) and the inferred-connections layer runs on TF-IDF, so building and maintaining the knowledge layer costs no model calls either.
 
-Two properties keep the vault itself cheap: the briefing is **templated and deterministic** (zero LLM tokens to produce), and the inferred-connections layer (related notes, project bridges, topic clusters) is **pure TF-IDF math** — no model calls to build or maintain the knowledge layer.
+Fine print: connecting the MCP server loads ~30 tool schemas into each session, a few thousand tokens of overhead that the first avoided file-read repays. Savings depend on the agent asking the vault before grepping; the connect-kit `CLAUDE.md` instructs it to. On very large vaults, prefer `topLinked` and `get_links` over a full `get_graph`. The cold-start row is an estimate; instrumented side-by-side agent sessions are future work.
 
-Honest fine print: connecting the MCP server loads ~30 tool schemas into each session (a few thousand tokens of overhead — any real working session earns it back on the first avoided file-read); savings depend on the agent asking the vault before grepping (the connect-kit `CLAUDE.md` steers this); and on very large vaults prefer `topLinked`/`get_links` over a full `get_graph`.
+## Accounts: the team walkthrough
 
-## Accounts & roles — the team walkthrough
+1. Sign in with `APP_PASSWORD` and open Accounts.
+2. Add a member. The account's token appears once; copy it and hand it to your teammate. If they lose it, click New Token, which revokes the old one at that moment.
+3. Approve the account. Until then its token does nothing.
+4. Your teammate connects their agent with `Authorization: Bearer ovk_…`. Every write they make carries their name in the audit trail. They can also sign in to the web UI with username plus token; the session carries member authority and nothing more.
+5. Appoint executives if you want others to approve accounts and review work.
 
-1. **You (owner)** sign in with `APP_PASSWORD` → **Accounts**.
-2. **Add a member** (their agent's username) → the account's token is revealed **once** — copy it and hand it to your teammate. Tokens are stored only as SHA-256 hashes; if it's lost, click **New Token** (the old one dies instantly).
-3. **Approve** the account (owner/executive). Until then its token is inert.
-4. **Teammate connects their agent** with `Authorization: Bearer ovk_…` — every write they make is attributed to their account in the audit trail. They can also **sign in to the web UI** (login → "My account" → username + token); their session carries exactly their account's authority — a member logging in never gains admin powers.
-5. Optionally appoint **executives** who can also approve accounts.
-
-Self-registration also works (`POST /api/accounts` or an agent calling it) — accounts start `pending` and show in the approval queue. The owner username (`OWNER_USERNAME`, default `owner`) is reserved and can never be squatted.
+Self-registration works too (`POST /api/accounts`); accounts start pending and wait in the approval queue. The owner username (`OWNER_USERNAME`, default `owner`) is reserved; nobody can register it.
 
 ## Quick start (local)
 
-Requires Node 20+ (built and tested on Node 24).
+Requires Node 20+.
 
 ```bash
 git clone https://github.com/fangiskhan/openvault openvault
@@ -140,60 +121,62 @@ npm run db:push             # create the SQLite database
 npm run dev                 # http://localhost:6900
 ```
 
-A fully local, offline, file-on-disk workspace. On first run, click **Load demo data** for three linked projects with a live status board — or `npm run db:seed` for the same thing from the CLI.
+Local, offline, file-on-disk. On first run, click Load demo data for three linked projects with a live status board, or run `npm run db:seed`.
 
 ## Deploy to Vercel
 
-Vercel has no persistent disk, so use Postgres + Blob:
+Local dev stays on SQLite; deploys use Postgres. The repo generates the Postgres schema at build time, so you never edit `schema.prisma` by hand.
 
-1. In `prisma/schema.prisma`, set `provider = "postgresql"`.
-2. Create a Postgres database (Supabase, Neon, or Vercel Postgres — all have free tiers).
-3. Set environment variables in Vercel: `DATABASE_URL`, `STORAGE_DRIVER=vercel` + `BLOB_READ_WRITE_TOKEN`, and **always** `APP_PASSWORD` + `AUTH_SECRET` (+ `MCP_TOKEN` if agents connect).
-4. Run `npx prisma db push` against the Postgres URL once to create the tables.
-5. Deploy. (`postinstall` runs `prisma generate` automatically.)
+1. Create a Postgres database (Neon, Supabase, or Vercel Postgres; each has a free tier).
+2. From your machine, provision the tables once:
+   ```bash
+   DATABASE_URL="<your postgres url>" npm run pg:push
+   ```
+3. In Vercel, set `DATABASE_URL`, `APP_PASSWORD`, `AUTH_SECRET`, `MCP_TOKEN`, `STORAGE_DRIVER=vercel` and `BLOB_READ_WRITE_TOKEN` (create a Blob store for uploads).
+4. Deploy. Vercel runs the repo's `vercel-build` script, which regenerates the Postgres schema and client before `next build`.
 
-> **Vercel Hobby is non-commercial** per Vercel's terms — companies need Vercel Pro or should self-host.
+Vercel Hobby is non-commercial under Vercel's terms; companies need Pro or should self-host.
 
 ## Self-host
 
-A normal Next.js app — modest requirements (1–2 vCPU, 1–4 GB RAM; a Raspberry Pi 4 handles single-user). The AI runs on the *client* side (Claude Code/Cursor), not the server, so there's no GPU or heavy compute.
+A normal Next.js app. 1-2 vCPU and 1-4 GB RAM suffice; a Raspberry Pi 4 handles single-user. The AI runs client-side in Claude Code or Cursor, so the server needs no GPU.
 
 ```bash
 npm install && npm run db:push && npm run build && npm run start
 ```
 
-Keep SQLite, or point `DATABASE_URL` at a local Postgres. Set `APP_PASSWORD`, `AUTH_SECRET`, and `MCP_TOKEN` — `npm run start` runs in production mode and **won't boot without them** (or with `OPENVAULT_PUBLIC=1` to opt into open gates). See [Configuration](#configuration).
+Keep SQLite or point `DATABASE_URL` at Postgres. Production refuses to start until you set `APP_PASSWORD`, `AUTH_SECRET` and `MCP_TOKEN` (or set `OPENVAULT_PUBLIC=1` on purpose).
 
 ## Configuration
 
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_URL` | SQLite file (`file:./dev.db`) locally, or a Postgres URL |
-| `APP_PASSWORD` | Human login gate. Empty = no gate (fine for localhost). **Required in production** unless `OPENVAULT_PUBLIC=1`. |
-| `AUTH_SECRET` | HMAC secret for the session cookie. Use a long random string; **must be changed from the placeholder in production** (a known value lets sessions be forged). |
-| `MCP_TOKEN` | Shared bearer token agents may present to `/api/mcp` (resolves to the owner). Per-account `ovk_` tokens are usually better. Empty = open (localhost only). **Required in production** unless `OPENVAULT_PUBLIC=1`. |
-| `OWNER_USERNAME` | Username of the root owner account (default `owner`). Reserved — nobody can register it. |
-| `OPENVAULT_PUBLIC` | Set to `1` to deliberately run with open gates (empty/placeholder secrets) in production. Unset by default. |
-| `STORAGE_DRIVER` | `local` (uploads → `./storage`) or `vercel` (Vercel Blob) |
+| `APP_PASSWORD` | Human login gate. Empty means no gate, which is fine for localhost. Required in production unless `OPENVAULT_PUBLIC=1`. |
+| `AUTH_SECRET` | HMAC secret for the session cookie. A known value lets anyone forge sessions, so change it from the placeholder in production. |
+| `MCP_TOKEN` | Shared bearer token for `/api/mcp`; resolves to the owner. Per-account `ovk_` tokens beat it for teams. Required in production unless `OPENVAULT_PUBLIC=1`. |
+| `OWNER_USERNAME` | Username of the root owner account (default `owner`). Reserved. |
+| `OPENVAULT_PUBLIC` | Set to `1` to run with open gates in production on purpose. |
+| `STORAGE_DRIVER` | `local` (uploads go to `./storage`) or `vercel` (Vercel Blob) |
 | `BLOB_READ_WRITE_TOKEN` | Required when `STORAGE_DRIVER=vercel` |
 
-**Fail-safe on exposure.** A production server (`NODE_ENV=production`, i.e. `npm run build && npm run start`, Vercel, or any real deploy) **refuses to start** if `APP_PASSWORD`/`AUTH_SECRET`/`MCP_TOKEN` are empty or left at their placeholders — so an exposed instance can't silently run with the human UI and the agent MCP write endpoint wide open. Local `npm run dev` is unaffected: the zero-config localhost loop still needs no secrets. To run open in production on purpose (a trusted LAN, a public read-only demo), set `OPENVAULT_PUBLIC=1`, which logs a loud warning at boot instead.
+A production server refuses to start if `APP_PASSWORD`, `AUTH_SECRET` or `MCP_TOKEN` are empty or left at placeholders, so an exposed instance can't run with the UI and the MCP write endpoint open. `npm run dev` skips the check; the zero-config localhost loop needs no secrets. To run open in production on a trusted LAN or as a public read-only demo, set `OPENVAULT_PUBLIC=1` and the server logs a warning at boot instead.
 
-**Security posture (v1):** account tokens hashed at rest (SHA-256 of 192-bit random keys) · constant-time shared-token compare · owner bootstrap that can't be squatted · per-account sessions that never escalate (a member's login carries member authority only) · brute-force rate limiting on sign-in, registration, MCP, and ingest · upload filename sanitization + storage-root confinement + size caps · append-only audit of registrations, approvals, role changes, token regenerations, logins, ingests, and agent writes · production boot refuses open gates · DB-backed regression tests over the whole safety core.
+Security, v1: tokens hashed at rest (SHA-256 of 192-bit random keys) · constant-time shared-token compare · owner bootstrap that can't be squatted · sessions that never escalate a member to admin · rate limits on sign-in, registration, MCP and ingest · upload filename sanitization, storage-root confinement and size caps · append-only audit of registrations, approvals, role changes, token regenerations, logins, ingests and agent writes · DB-backed regression tests over the safety core.
 
-## Status & roadmap
+## Roadmap
 
-**Built and working (v1):** self-host (SQLite/Postgres) · projects + connections · scoped search · wikilinks/backlinks/graph · Excel/CSV upload+parse · deterministic status + attention + cited briefing (unit-tested, 0 tokens) · MCP read/write with enforced identity · **shared code mirror + work-intent coordination** · **multi-user accounts, roles, approval, hashed per-account tokens, audit trail** · JSON export · importer (`scripts/import-claude-code.ts`) · first-run onboarding + in-app agent connect.
+Built: everything under [What works today](#what-works-today).
 
-**Not built yet:**
+Not built:
 
-- **Native integration adapters** — the generic webhook foundation is live (`POST /api/ingest`: bearer-authed, upserts by `sourceRef`, so Jira automation / Slack workflows / GitHub Actions / Zapier / n8n can push items today); dedicated per-service adapters with OAuth and richer mapping are roadmap. Realtime push (live browser updates) also roadmap.
-- **Private ↔ shared (preview / production)** — a personal draft space over the shared company source of truth, with selective publish.
-- **SSO** and browser-level e2e tests.
+- Native integration adapters. The webhook foundation runs today through `POST /api/ingest`; per-service adapters with OAuth and richer field mapping do not exist yet. Realtime browser updates also wait here.
+- A private draft space over the shared source of truth, with selective publish.
+- SSO and browser-level e2e tests.
 
 ## Tech stack
 
-Next.js 16 (App Router) · React 19 · TypeScript · Prisma 6 (SQLite / Postgres) · Tailwind v4 · zod · exceljs · vitest. No Prisma enums, so the schema stays SQLite + Postgres compatible.
+Next.js 16 (App Router) · React 19 · TypeScript · Prisma 6 (SQLite / Postgres) · Tailwind v4 · zod · exceljs · vitest. No Prisma enums, so one schema serves SQLite and Postgres.
 
 ## License
 

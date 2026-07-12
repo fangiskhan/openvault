@@ -31,7 +31,8 @@ The common thread: **the current status is already in OpenVault, so you read it 
 - **Excel & CSV upload** — parsed into searchable, previewable tables (size-capped, path-safe)
 - **Status & attention** — a deterministic engine flags overdue / blocked / open-risk / due-soon / stale items (each cited to a source), rolls them into a **RAG status** per project and across connected projects, and shows a manual override alongside the computed one
 - **Cited briefing** — a one-screen status summary built only from real items; every line clicks through to its source. Deterministic and **zero-token**.
-- **AI agents over MCP** — 28 tools: agents read status, write updates, traverse the knowledge graph, share code, and coordinate work (see below)
+- **AI agents over MCP** — 30 tools: agents read status, write updates, traverse the knowledge graph, share code, and coordinate work (see below)
+- **Inferred connections** — content similarity surfaces notes that belong together but were never linked (the "Related" rail + `suggest_links`), project pairs that share concepts before anyone connects them (`find_project_bridges`), and emergent topic clusters in the graph — every suggestion explained by the shared terms that drive it
 - **Shared code mirror + work announcements** — agents push file snapshots and declare intents; other agents browse the code and get conflict warnings before touching the same files
 - **Multi-user accounts** — request → approve → connect, with roles (owner / executive / member), per-account bearer tokens stored **only as SHA-256 hashes** (shown once, regenerate from the UI), **per-account web login** (username + token; sessions carry that account's authority, never more), and an append-only **audit trail** of every approval, role change, login, and agent write
 - **Code tab** — humans browse the agent-synced code mirror and the live work board; owners/executives approve or request changes on in-review work right from the UI
@@ -59,12 +60,12 @@ claude mcp add --transport http openvault http://localhost:6900/api/mcp \
 
 (Drop the `--header` entirely for open local use with no `MCP_TOKEN` set.)
 
-**Tools (28):**
+**Tools (30):**
 
 | Group | Tools |
 | --- | --- |
 | Read | `list_projects` · `get_status` · `get_attention` · `get_briefing` · `get_recent_activity` · `search` · `read_item` · `get_inbox` |
-| Knowledge graph | `get_graph` (nodes + edges + most-connected concepts) · `get_links` (one note's neighborhood) · `find_path` (shortest wikilink chain between two notes) |
+| Knowledge graph | `get_graph` (nodes + edges + most-connected concepts + emergent topic clusters) · `get_links` (one note's neighborhood) · `find_path` (shortest wikilink chain between two notes) · `suggest_links` (notes that belong together but were never linked, each explained by shared terms) · `find_project_bridges` (which projects share concepts — before anyone connects them) |
 | Write (attributed) | `set_status` · `append_update` · `flag_issue` (cross-project blocker) · `request_info` |
 | **Code & coordination** | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
 | Identity & admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |

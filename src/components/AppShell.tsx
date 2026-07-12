@@ -37,6 +37,7 @@ type ItemFull = {
   links: LinkRef[];
   backlinks: Backlink[];
 };
+type RelatedNote = { itemId: string; title: string; project: string; score: number; because: string[] };
 type SearchResult = {
   id: string;
   title: string;
@@ -95,6 +96,28 @@ export default function AppShell() {
   const [showConnect, setShowConnect] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status" | "code">("notes");
+  const [related, setRelated] = useState<RelatedNote[]>([]);
+  // Inferred connections for the open note — notes that belong together but
+  // were never wikilinked. Debounced fetch keyed to the open item.
+  useEffect(() => {
+    if (!item) {
+      setRelated([]);
+      return;
+    }
+    let live = true;
+    const t = setTimeout(async () => {
+      try {
+        const r = await api(`/api/related?itemId=${item.id}`);
+        if (live) setRelated(r.suggestions ?? []);
+      } catch {
+        if (live) setRelated([]);
+      }
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [item]);
   // Signed-in identity — drives the identity chip and whether review buttons show.
   const [me, setMe] = useState<{ kind: string; username?: string; role?: string } | null>(null);
   useEffect(() => {
@@ -864,6 +887,22 @@ export default function AppShell() {
                   ))
                 )}
               </div>
+              {related.length > 0 && (
+                <div className="rail-section">
+                  <h4>Related (inferred)</h4>
+                  {related.map((r) => (
+                    <button
+                      key={r.itemId}
+                      className="rail-link"
+                      title={`shares: ${r.because.join(", ")}`}
+                      onClick={() => openItem(r.itemId)}
+                    >
+                      {r.title}
+                      <span className="sub"> · {r.because.slice(0, 2).join(", ")}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </aside>

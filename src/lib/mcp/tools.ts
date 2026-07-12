@@ -7,6 +7,11 @@ import { ITEM_STATUSES, CONTENT_TYPES } from "../validation";
 import { approveAccount, setRole } from "../accounts";
 import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 import { reviewWorkIntent } from "../work";
+import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
+
+// Text snippet used for similarity: title carries the most signal, body capped
+// so one giant note can't dominate corpus building time.
+const simText = (title: string, body: string) => `${title}\n${title}\n${body.slice(0, 5000)}`;
 
 // The authenticated caller, resolved from the MCP bearer token by the route.
 // null = anonymous (only possible in open local/dev mode).
@@ -783,13 +788,134 @@ export const tools: Tool[] = [
         project: i.project.name,
         degree: degree.get(i.id) ?? 0,
       }));
+      // Emergent topic clusters (label propagation), each named after its
+      // most-connected member — the graph's structure, not just its edges.
+      const labels = detectCommunities(nodes.map((n) => n.itemId), edges.map((e) => ({ from: e.fromItemId, to: e.toItemId! })));
+      const grouped = new Map<string, typeof nodes>();
+      for (const n of nodes) {
+        const l = labels.get(n.itemId) ?? n.itemId;
+        (grouped.get(l) ?? grouped.set(l, []).get(l)!).push(n);
+      }
+      const communities = [...grouped.values()]
+        .filter((members) => members.length >= 2)
+        .map((members) => {
+          const sorted = [...members].sort((x, y) => y.degree - x.degree);
+          return { label: sorted[0].title, size: members.length, members: sorted.map((m) => ({ itemId: m.itemId, title: m.title })) };
+        })
+        .sort((a, b) => b.size - a.size);
       return {
         nodeCount: nodes.length,
         edgeCount: edges.length,
         topLinked: [...nodes].sort((x, y) => y.degree - x.degree).slice(0, 10),
+        communities,
         nodes,
         edges: edges.map((e) => ({ from: e.fromItemId, to: e.toItemId })),
       };
+    },
+  },
+  {
+    name: "suggest_links",
+    description:
+      "Notes that likely BELONG with this one but were never wikilinked — content-similarity suggestions across connected projects, each explained by the shared terms that drive it. Use to densify the knowledge graph: read the suggestions, then add real [[wikilinks]] where they're right.",
+    inputSchema: {
+      type: "object",
+      properties: { itemId: { type: "string" }, limit: { type: "number", default: 8 } },
+      required: ["itemId"],
+    },
+    handler: async (a) => {
+      const { itemId, limit } = a as { itemId: string; limit?: number };
+      const item = await prisma.item.findUnique({
+        where: { id: itemId },
+        select: {
+          id: true, title: true, body: true, projectId: true,
+          outLinks: { select: { toItemId: true } },
+          inLinks: { select: { fromItemId: true } },
+        },
+      });
+      if (!item) throw new Error("item not found");
+      const already = new Set([
+        item.id,
+        ...item.outLinks.map((l) => l.toItemId).filter(Boolean),
+        ...item.inLinks.map((l) => l.fromItemId),
+      ] as string[]);
+      const projectIds = await scopeProjectIds(item.projectId, "connected");
+      const candidates = await prisma.item.findMany({
+        where: { type: { in: [...CONTENT_TYPES] }, ...(projectIds ? { projectId: { in: projectIds } } : {}) },
+        select: { id: true, title: true, body: true, projectId: true, project: { select: { name: true } } },
+      });
+      const corpus = buildCorpus(candidates.map((c) => ({ id: c.id, projectId: c.projectId, text: simText(c.title, c.body) })));
+      const self = corpus.vectors.get(item.id) ?? buildCorpus([{ id: item.id, projectId: item.projectId, text: simText(item.title, item.body) }]).vectors.get(item.id)!;
+      const scored = candidates
+        .filter((c) => !already.has(c.id))
+        .map((c) => ({ c, score: cosine(self, corpus.vectors.get(c.id)!) }))
+        .filter((s) => s.score >= 0.12)
+        .sort((x, y) => y.score - x.score)
+        .slice(0, Math.min(limit ?? 8, 25));
+      return {
+        itemId: item.id,
+        title: item.title,
+        suggestions: scored.map(({ c, score }) => ({
+          itemId: c.id,
+          title: c.title,
+          project: c.project.name,
+          score: Math.round(score * 100) / 100,
+          because: sharedTerms(self, corpus.vectors.get(c.id)!),
+        })),
+      };
+    },
+  },
+  {
+    name: "find_project_bridges",
+    description:
+      "Which projects share concepts — before anyone connects them. Scores every project pair by cross-project note similarity and existing cross-links, with the top note pairs as evidence. The 'how does our work connect' question, answered from content.",
+    inputSchema: { type: "object", properties: { limit: { type: "number", default: 5 } } },
+    handler: async (a) => {
+      const { limit } = a as { limit?: number };
+      const notes = await prisma.item.findMany({
+        where: { type: { in: [...CONTENT_TYPES] } },
+        select: { id: true, title: true, body: true, projectId: true, project: { select: { name: true } } },
+      });
+      const projects = new Map(notes.map((n) => [n.projectId, n.project.name]));
+      if (projects.size < 2) return { bridges: [], hint: "need at least two projects" };
+      const corpus = buildCorpus(notes.map((n) => ({ id: n.id, projectId: n.projectId, text: simText(n.title, n.body) })));
+
+      // Best cross-project note pairs per project pair.
+      type Pair = { score: number; evidence: Array<{ a: string; aTitle: string; b: string; bTitle: string; score: number; because: string[] }> };
+      const pairs = new Map<string, Pair>();
+      for (let i = 0; i < notes.length; i++) {
+        for (let j = i + 1; j < notes.length; j++) {
+          if (notes[i].projectId === notes[j].projectId) continue;
+          const score = cosine(corpus.vectors.get(notes[i].id)!, corpus.vectors.get(notes[j].id)!);
+          if (score < 0.15) continue;
+          const key = [notes[i].projectId, notes[j].projectId].sort().join("|");
+          const p = pairs.get(key) ?? { score: 0, evidence: [] };
+          p.evidence.push({
+            a: notes[i].id, aTitle: notes[i].title,
+            b: notes[j].id, bTitle: notes[j].title,
+            score: Math.round(score * 100) / 100,
+            because: sharedTerms(corpus.vectors.get(notes[i].id)!, corpus.vectors.get(notes[j].id)!, 4),
+          });
+          pairs.set(key, p);
+        }
+      }
+      const existing = await prisma.projectRelation.findMany({ select: { fromProjectId: true, toProjectId: true } });
+      const connected = new Set(existing.map((r) => [r.fromProjectId, r.toProjectId].sort().join("|")));
+
+      const bridges = [...pairs.entries()]
+        .map(([key, p]) => {
+          const [pa, pb] = key.split("|");
+          const top = p.evidence.sort((x, y) => y.score - x.score).slice(0, 3);
+          return {
+            projects: [projects.get(pa), projects.get(pb)],
+            projectIds: [pa, pb],
+            score: Math.round(top.reduce((s, e) => s + e.score, 0) / top.length * 100) / 100,
+            alreadyConnected: connected.has(key),
+            evidence: top,
+          };
+        })
+        .sort((x, y) => y.score - x.score)
+        .slice(0, Math.min(limit ?? 5, 20));
+      return { bridges };
     },
   },
   {

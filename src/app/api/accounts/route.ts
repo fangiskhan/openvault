@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/db";
 import { registerAccount, approverFrom } from "@/lib/accounts";
 import { badRequest } from "@/lib/http";
+import { rateLimit, clientKey, tooMany } from "@/lib/ratelimit";
 
 // POST: request an account (anyone). Created as pending; the returned token is
 // inert until an owner/executive approves it.
 export async function POST(req: Request) {
+  // Open registration endpoint: stop pending-queue flooding.
+  if (!rateLimit(`register:${clientKey(req)}`, 5, 3_600_000)) return tooMany("too many registrations; try later");
   const data = (await req.json().catch(() => ({}))) as { username?: unknown; displayName?: unknown };
   if (typeof data.username !== "string") return badRequest("username required");
   try {

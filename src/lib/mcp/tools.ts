@@ -6,6 +6,7 @@ import { buildTemplatedBriefing } from "../briefing/templated";
 import { ITEM_STATUSES, CONTENT_TYPES } from "../validation";
 import { approveAccount, setRole } from "../accounts";
 import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
+import { reviewWorkIntent } from "../work";
 
 // The authenticated caller, resolved from the MCP bearer token by the route.
 // null = anonymous (only possible in open local/dev mode).
@@ -635,29 +636,7 @@ export const tools: Tool[] = [
       const approver = requireApprover(ctx);
       const { intentId, verdict, note } = a as { intentId: string; verdict: string; note?: string };
       if (verdict !== "approve" && verdict !== "request_changes") throw new Error("verdict must be approve or request_changes");
-      if (verdict === "request_changes" && !note?.trim()) throw new Error("a note is required when requesting changes");
-      const existing = await prisma.workIntent.findUnique({ where: { id: intentId } });
-      if (!existing) throw new Error("work intent not found");
-      const approved = verdict === "approve";
-      const updated = await prisma.workIntent.update({
-        where: { id: intentId },
-        data: {
-          status: approved ? "done" : "in_progress",
-          reviewedBy: approved ? approver.username : null,
-          reviewNote: note?.trim() || null,
-          reviewedAt: new Date(),
-        },
-        select: { id: true, status: true, intent: true, actor: true, reviewedBy: true, reviewNote: true },
-      });
-      await prisma.auditEvent.create({
-        data: { action: approved ? "approve_work" : "request_changes", actor: approver.username, target: existing.actor, detail: existing.intent.slice(0, 200) },
-      });
-      return {
-        ...updated,
-        message: approved
-          ? `Approved — ${existing.actor} may merge/push these changes to git.`
-          : `Changes requested — sent back to ${existing.actor} with your note.`,
-      };
+      return reviewWorkIntent(intentId, verdict, note, approver);
     },
   },
   {

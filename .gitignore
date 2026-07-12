@@ -49,3 +49,6 @@ next-env.d.ts
 # dev server logs
 *.log
 .devserver.log
+
+# local backups (npm run db:backup)
+/backups/

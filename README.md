@@ -33,7 +33,10 @@ The common thread: **the current status is already in OpenVault, so you read it 
 - **Cited briefing** — a one-screen status summary built only from real items; every line clicks through to its source. Deterministic and **zero-token**.
 - **AI agents over MCP** — 25 tools: agents read status, write updates, share code, and coordinate work (see below)
 - **Shared code mirror + work announcements** — agents push file snapshots and declare intents; other agents browse the code and get conflict warnings before touching the same files
-- **Multi-user accounts** — request → approve → connect, with roles (owner / executive / member), per-account bearer tokens stored **only as SHA-256 hashes** (shown once, regenerate from the UI), and an append-only **audit trail** of every approval, role change, and agent write
+- **Multi-user accounts** — request → approve → connect, with roles (owner / executive / member), per-account bearer tokens stored **only as SHA-256 hashes** (shown once, regenerate from the UI), **per-account web login** (username + token; sessions carry that account's authority, never more), and an append-only **audit trail** of every approval, role change, login, and agent write
+- **Code tab** — humans browse the agent-synced code mirror and the live work board; owners/executives approve or request changes on in-review work right from the UI
+- **Webhook ingest** — `POST /api/ingest` lets Jira automation / Slack workflows / GitHub Actions / Zapier push items in; same `sourceRef` updates instead of duplicating
+- **Ops** — brute-force rate limiting on auth/registration/MCP, and `npm run db:backup` for timestamped full-vault JSON snapshots (cron/Task Scheduler-ready)
 - **Data export** — one click exports a project or the whole vault as JSON; your data stays yours
 - **First-run onboarding** — empty vault offers *Create project / Load demo data / Connect an agent* (with the ready-to-paste MCP command and copyable project IDs)
 
@@ -100,7 +103,7 @@ And the "coffee question" — *what did everyone's agents do since yesterday?* �
 1. **You (owner)** sign in with `APP_PASSWORD` → **Accounts**.
 2. **Add a member** (their agent's username) → the account's token is revealed **once** — copy it and hand it to your teammate. Tokens are stored only as SHA-256 hashes; if it's lost, click **New Token** (the old one dies instantly).
 3. **Approve** the account (owner/executive). Until then its token is inert.
-4. **Teammate connects their agent** with `Authorization: Bearer ovk_…` — every write they make is attributed to their account in the audit trail.
+4. **Teammate connects their agent** with `Authorization: Bearer ovk_…` — every write they make is attributed to their account in the audit trail. They can also **sign in to the web UI** (login → "My account" → username + token); their session carries exactly their account's authority — a member logging in never gains admin powers.
 5. Optionally appoint **executives** who can also approve accounts.
 
 Self-registration also works (`POST /api/accounts` or an agent calling it) — accounts start `pending` and show in the approval queue. The owner username (`OWNER_USERNAME`, default `owner`) is reserved and can never be squatted.
@@ -157,7 +160,7 @@ Keep SQLite, or point `DATABASE_URL` at a local Postgres. Set `APP_PASSWORD`, `A
 
 **Fail-safe on exposure.** A production server (`NODE_ENV=production`, i.e. `npm run build && npm run start`, Vercel, or any real deploy) **refuses to start** if `APP_PASSWORD`/`AUTH_SECRET`/`MCP_TOKEN` are empty or left at their placeholders — so an exposed instance can't silently run with the human UI and the agent MCP write endpoint wide open. Local `npm run dev` is unaffected: the zero-config localhost loop still needs no secrets. To run open in production on purpose (a trusted LAN, a public read-only demo), set `OPENVAULT_PUBLIC=1`, which logs a loud warning at boot instead.
 
-**Security posture (v1):** account tokens hashed at rest (SHA-256 of 192-bit random keys) · constant-time shared-token compare · owner bootstrap that can't be squatted · upload filename sanitization + storage-root confinement + size caps · append-only audit of registrations, approvals, role changes, token regenerations, and agent writes · production boot refuses open gates.
+**Security posture (v1):** account tokens hashed at rest (SHA-256 of 192-bit random keys) · constant-time shared-token compare · owner bootstrap that can't be squatted · per-account sessions that never escalate (a member's login carries member authority only) · brute-force rate limiting on sign-in, registration, MCP, and ingest · upload filename sanitization + storage-root confinement + size caps · append-only audit of registrations, approvals, role changes, token regenerations, logins, ingests, and agent writes · production boot refuses open gates · DB-backed regression tests over the whole safety core.
 
 ## Status & roadmap
 
@@ -165,11 +168,9 @@ Keep SQLite, or point `DATABASE_URL` at a local Postgres. Set `APP_PASSWORD`, `A
 
 **Not built yet:**
 
-- **Integrations with live sync** — Jira / Slack / Notion / GitHub. Designed to be **webhook-driven**: e.g. a Jira comment would POST to OpenVault and create/update an Item automatically. (Seeing it change *live in an open browser tab* additionally needs realtime push — also roadmap.)
+- **Native integration adapters** — the generic webhook foundation is live (`POST /api/ingest`: bearer-authed, upserts by `sourceRef`, so Jira automation / Slack workflows / GitHub Actions / Zapier / n8n can push items today); dedicated per-service adapters with OAuth and richer mapping are roadmap. Realtime push (live browser updates) also roadmap.
 - **Private ↔ shared (preview / production)** — a personal draft space over the shared company source of truth, with selective publish.
-- **Per-account web login** — human sign-in per person (today the web UI has one owner password; per-account identity exists for agents/API).
-- **Code mirror UI** — browse synced code and active work intents in the web app (today it's agent-facing over MCP).
-- **Hardening** — SSO, rate limiting, e2e tests, backup automation.
+- **SSO** and browser-level e2e tests.
 
 ## Tech stack
 

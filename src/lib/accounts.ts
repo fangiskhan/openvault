@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { prisma } from "./db";
-import { isAuthed } from "./auth";
+import { isAuthed, sessionIdentity } from "./auth";
 
 // Multi-user identity layer. Accounts are requested (pending) and must be
 // approved by an owner/executive before their per-account token works. The
@@ -100,10 +100,21 @@ export async function resolveBearer(req: Request) {
 }
 
 // The acting approver for an HTTP request: an APP_PASSWORD session counts as the
-// owner; otherwise an approved owner/executive bearer token. Returns null if the
-// caller has no approving authority.
+// owner; a per-account session counts as THAT account (it must itself be an
+// approved owner/executive — logging in must never escalate a member to owner);
+// otherwise an approved owner/executive bearer token. Null = no authority.
 export async function approverFrom(req: Request) {
-  if (await isAuthed()) return getOrCreateOwner();
+  const session = await sessionIdentity();
+  if (session?.kind === "password") return getOrCreateOwner();
+  if (session?.kind === "account") {
+    const acc = await prisma.account.findUnique({ where: { id: session.accountId } });
+    return acc && acc.status === "approved" && (acc.role === "owner" || acc.role === "executive") ? acc : null;
+  }
+  if (await isAuthed()) {
+    // No cookie session, but the server runs open (dev/OPENVAULT_PUBLIC): the
+    // local human is the owner, same as before accounts existed.
+    return getOrCreateOwner();
+  }
   const bearer = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const acc = await resolveByToken(bearer);
   if (acc && acc.status === "approved" && (acc.role === "owner" || acc.role === "executive")) return acc;

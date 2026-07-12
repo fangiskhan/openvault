@@ -6,6 +6,7 @@ import SpreadsheetView, { type Sheet } from "./SpreadsheetView";
 import GraphView from "./GraphView";
 import StatusView from "./StatusView";
 import AccountsAdmin from "./AccountsAdmin";
+import CodeView from "./CodeView";
 
 type Project = { id: string; name: string; color: string | null; itemCount: number };
 type Connection = { id: string; name: string; color: string | null; slug: string; kind: string };
@@ -93,7 +94,15 @@ export default function AppShell() {
   const [showGraph, setShowGraph] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
-  const [view, setView] = useState<"notes" | "status">("notes");
+  const [view, setView] = useState<"notes" | "status" | "code">("notes");
+  // Signed-in identity — drives the identity chip and whether review buttons show.
+  const [me, setMe] = useState<{ kind: string; username?: string; role?: string } | null>(null);
+  useEffect(() => {
+    fetch("/api/auth")
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setMe)
+      .catch(() => setMe(null));
+  }, []);
 
   const [showConnectAgent, setShowConnectAgent] = useState(false);
   const [origin, setOrigin] = useState("");
@@ -485,6 +494,9 @@ export default function AppShell() {
           <button className={view === "status" ? "on" : ""} onClick={() => setView("status")}>
             Status
           </button>
+          <button className={view === "code" ? "on" : ""} onClick={() => setView("code")}>
+            Code
+          </button>
         </div>
         <div className="searchwrap">
           <input
@@ -555,6 +567,19 @@ export default function AppShell() {
           ))}
         </div>
         <div className="spacer" />
+        {me?.username && me.kind !== "open" && (
+          <button
+            className="id-chip"
+            title="Signed in — click to sign out"
+            onClick={async () => {
+              await fetch("/api/auth", { method: "DELETE" });
+              window.location.href = "/login";
+            }}
+          >
+            @{me.username}
+            {me.role && me.role !== "member" ? ` · ${me.role}` : ""}
+          </button>
+        )}
         <button className="btn" onClick={() => fileRef.current?.click()} disabled={!activeProjectId}>
           ↑ Upload
         </button>
@@ -679,7 +704,13 @@ export default function AppShell() {
         </aside>
 
         <main className="main">
-          {view === "status" && activeProjectId ? (
+          {view === "code" && activeProjectId ? (
+            <CodeView
+              projectId={activeProjectId}
+              canReview={me?.role === "owner" || me?.role === "executive"}
+              onError={notify}
+            />
+          ) : view === "status" && activeProjectId ? (
             <StatusView
               projectId={activeProjectId}
               scope={scope}

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { tools, toolMap, type ToolCtx } from "@/lib/mcp/tools";
 import { secretsRequired } from "@/lib/security";
 import { resolveByToken, getOrCreateOwner } from "@/lib/accounts";
+import { rateLimit, clientKey } from "@/lib/ratelimit";
 
 // Constant-time string compare so the shared-token check can't be probed byte
 // by byte via response timing. Bails on length mismatch (that much is public).
@@ -62,6 +63,11 @@ type RpcMessage = {
 };
 
 export async function POST(req: Request) {
+  // Generous — a busy agent makes bursts of calls — but bounds runaway loops
+  // and unauthenticated probing alike.
+  if (!rateLimit(`mcp:${clientKey(req)}`, 300, 60_000)) {
+    return error(null, -32000, "rate limited: over 300 requests/minute", 429);
+  }
   const caller = await resolveCaller(req);
   if ("reject" in caller) return caller.reject;
   const ctx: ToolCtx = caller;

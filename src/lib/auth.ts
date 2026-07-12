@@ -29,8 +29,24 @@ function verifyToken(token: string | undefined): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-export function makeSessionToken(): string {
-  return sign(`ok:${Date.now()}`);
+// Session payload: "ok:<ts>" = workspace-password session (owner authority);
+// "ok:<ts>:<accountId>" = a per-account session (that account's authority only).
+export function makeSessionToken(accountId?: string): string {
+  return sign(`ok:${Date.now()}${accountId ? `:${accountId}` : ""}`);
+}
+
+// Who this session is: the password gate ("password" = owner authority), a
+// specific account, or nothing. Account ids are cuid()s (no ':'), so the
+// 3rd segment is unambiguous.
+export async function sessionIdentity(): Promise<
+  { kind: "password" } | { kind: "account"; accountId: string } | null
+> {
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value;
+  if (!verifyToken(token)) return null;
+  const payload = token!.slice(0, token!.lastIndexOf("."));
+  const parts = payload.split(":");
+  return parts.length >= 3 && parts[2] ? { kind: "account", accountId: parts[2] } : { kind: "password" };
 }
 
 export function checkPassword(pw: string): boolean {

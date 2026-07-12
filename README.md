@@ -111,6 +111,8 @@ And the "coffee question" — *what did everyone's agents do since yesterday?* �
 | Scrolling old transcripts for "what did we decide about X" | `search` / `read_item` → one short cited note | Grows with your history |
 | Reading many notes to find the relevant one | `topLinked` / `get_links` / `find_path` — navigate the graph, then read one | Same pattern as graph-based code tools |
 
+Measured on this repo's own vault (89 mirrored files, ~180 notes): the injected briefing is **~340 tokens**; `get_code_map` is **~6k tokens vs ~83k** for reading the mirror's contents (**14× cheaper** to learn what changed); a full 7-day `get_recent_activity` digest is **~1.3k tokens**. The cold-start comparison ("20–50k tokens of re-exploration") is an estimate, not a benchmark — instrumented side-by-side agent sessions are future work.
+
 Two properties keep the vault itself cheap: the briefing is **templated and deterministic** (zero LLM tokens to produce), and the inferred-connections layer (related notes, project bridges, topic clusters) is **pure TF-IDF math** — no model calls to build or maintain the knowledge layer.
 
 Honest fine print: connecting the MCP server loads ~30 tool schemas into each session (a few thousand tokens of overhead — any real working session earns it back on the first avoided file-read); savings depend on the agent asking the vault before grepping (the connect-kit `CLAUDE.md` steers this); and on very large vaults prefer `topLinked`/`get_links` over a full `get_graph`.

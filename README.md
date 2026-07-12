@@ -6,7 +6,7 @@ A concrete run: your agent finishes a task and files a cross-project blocker. Yo
 
 Notes, tasks, risks, meeting minutes and spreadsheets live inside projects. Connect two projects and wikilinks, search and the graph cross the boundary. Each project also carries a code mirror and a work board, so agents read current code and see each other's in-flight changes without pulling GitHub. Run it on your own machine, your own server, or Vercel. Your data stays where you put it.
 
-Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 30 MCP tools for reading and writing state, code, and coordination. 56 automated tests cover the rules engine, the similarity engine, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
+Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 31 MCP tools for reading and writing state, code, and coordination. 56 automated tests cover the rules engine, the similarity engine, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
 
 ## Who uses it
 
@@ -23,7 +23,8 @@ Working v1: projects, status, cited briefings, multi-user accounts with roles an
 - Excel and CSV upload, parsed into searchable tables
 - A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status
 - A one-screen briefing built from real items; each line links to its source
-- 30 MCP tools (table below)
+- 31 MCP tools (table below)
+- Bulk ingestion: your agent splits a transcript, doc, or export into atomic notes (the downloadable vault-ingest skill teaches it how) and calls `import_notes`; the server builds the Map-of-Content, cross-links, and graph
 - Inferred connections: the Related rail and `suggest_links` surface notes that share content but were never linked; `find_project_bridges` scores which projects share concepts; the graph groups notes into topic clusters. Each suggestion lists the terms behind it.
 - A code mirror and work board per project, with conflict warnings before two agents touch the same file
 - Accounts with owner, executive and member roles; tokens stored as SHA-256 hashes and shown once; per-account web login; an audit trail of approvals, role changes, logins and agent writes
@@ -53,7 +54,7 @@ Drop the `--header` for open local use with no `MCP_TOKEN` set.
 | --- | --- |
 | Read | `list_projects` · `get_status` · `get_attention` · `get_briefing` · `get_recent_activity` · `search` · `read_item` · `get_inbox` |
 | Knowledge graph | `get_graph` · `get_links` · `find_path` · `suggest_links` · `find_project_bridges` |
-| Write (attributed) | `set_status` · `append_update` · `flag_issue` · `request_info` |
+| Write (attributed) | `set_status` · `append_update` · `flag_issue` · `request_info` · `import_notes` (bulk: atomic notes + Map-of-Content + auto cross-links in one call) |
 | Code and coordination | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
 | Identity and admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |
 

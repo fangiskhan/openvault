@@ -16,10 +16,63 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const projectId = url.searchParams.get("projectId") ?? "";
   const file = url.searchParams.get("file") ?? "claude";
+  const base = `${url.protocol}//${url.host}`;
+
+  // The ingest skill is vault-wide (it discovers projects itself) — no projectId.
+  if (file === "ingest-skill") {
+    const skill = `---
+name: vault-ingest
+description: Ingest a conversation, transcript, document, or database export into OpenVault as linked atomic notes. Use when asked to "ingest this into the vault", "import this doc", "upload this database", or to turn raw content into organized notes.
+---
+
+# /vault-ingest — turn raw content into a linked knowledge graph
+
+> Install: save this file as \`~/.claude/skills/vault-ingest/SKILL.md\`, then start a new session.
+> Requires the \`openvault\` MCP server connected (${base}/api/mcp).
+
+OpenVault stores knowledge as atomic, wikilinked notes. The server builds the
+graph (links, backlinks, related-note inference, topic clusters) on its own;
+YOUR job is the judgment: splitting raw content into good notes.
+
+## How to ingest
+
+1. **Read the source** (conversation, transcript, doc, DB export, spreadsheet).
+2. **Split it into atomic notes.** One idea, decision, problem, or chapter per
+   note. Aim for 5-40 notes per source. Each note gets:
+   - A specific, searchable title ("Auth token hashing decision", never "Notes 3")
+   - A markdown body that stands alone (a reader lands here without context)
+   - \`[[wikilinks]]\` to other note titles wherever ideas touch
+   - A type: note | meeting | task | risk (tasks/risks feed the status board)
+3. **Call the \`import_notes\` MCP tool** with the batch:
+   - \`projectName\`: an existing project or a new name (it creates the project)
+   - \`notes\`: your atomic notes
+   - \`mocTitle\`: "<Source> — Map of Content" (recommended; becomes the index)
+   - \`connectTo\`: related project names, so links and search cross over
+   - Max 1000 notes per call; batch larger sources.
+   - Never set \`replace\` unless the user asks to overwrite (owner/executive only).
+4. **Verify**: call \`get_graph\` on the project; if notes came out isolated
+   (degree 0), add wikilinks and re-import those notes, or use \`suggest_links\`
+   to find what they should point at.
+5. **Report**: tell the user the project, note count, and the MOC title.
+
+## Rules
+
+- Split by meaning, never by length. A 3-line decision beats a 3-page dump.
+- Preserve the source's facts; do not summarize away specifics (names, numbers,
+  commands, errors).
+- Reuse existing note titles in wikilinks when the vault already covers a
+  topic (\`search\` first) — the graph self-heals ghost links by title.
+`;
+    return new Response(skill, {
+      headers: {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="SKILL.md"`,
+      },
+    });
+  }
+
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true } });
   if (!project) return badRequest("unknown projectId");
-
-  const base = `${url.protocol}//${url.host}`;
 
   if (file === "hooks") {
     const hooks = {

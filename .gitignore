@@ -55,3 +55,5 @@ next-env.d.ts
 
 # generated at deploy time from schema.prisma (npm run pg:schema)
 /prisma/schema.postgres.prisma
+.vercel
+.env*

@@ -1061,6 +1061,19 @@ export default function AppShell() {
                 (SessionStart injects this vault&apos;s briefing) · <code>Git hook</code> → save as{" "}
                 <code>.git/hooks/post-commit</code> (each commit auto-syncs its changed files to the code mirror).
               </p>
+              <div className="copyrow" style={{ marginTop: 10 }}>
+                <span className="truncate" style={{ flex: 1 }}>
+                  Bulk ingest — teach your agent to turn transcripts, docs, and exports into linked notes (
+                  <code>import_notes</code>)
+                </span>
+                <a
+                  className="btn"
+                  href="/api/connect-kit?file=ingest-skill"
+                  title="Save as ~/.claude/skills/vault-ingest/SKILL.md — then say /vault-ingest to your agent"
+                >
+                  Ingest skill
+                </a>
+              </div>
             </div>
           </div>
         </div>

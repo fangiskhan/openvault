@@ -3,7 +3,8 @@ import { detectSignals } from "../attention";
 import { rollup, rollupConnected, rollupMany } from "../status";
 import { scopeProjectIds } from "../projects";
 import { buildTemplatedBriefing } from "../briefing/templated";
-import { ITEM_STATUSES, CONTENT_TYPES } from "../validation";
+import { ITEM_STATUSES, CONTENT_TYPES, importSchema } from "../validation";
+import { importProject } from "../import";
 import { approveAccount, setRole } from "../accounts";
 import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 import { reviewWorkIntent } from "../work";
@@ -916,6 +917,54 @@ export const tools: Tool[] = [
         .sort((x, y) => y.score - x.score)
         .slice(0, Math.min(limit ?? 5, 20));
       return { bridges };
+    },
+  },
+  {
+    name: "import_notes",
+    description:
+      "Bulk-import structured content as Obsidian-style linked notes: one note per entry, an optional Map-of-Content that wikilinks them all, keyword cross-links between related notes, and full graph resolution. Creates the project if the name is new. Use for ingesting transcripts, docs, or database exports AFTER you have split them into atomic notes with clear titles. Up to 1000 notes per call; batch beyond that. replace=true wipes the project's existing items first (owner/executive only).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectName: { type: "string", description: "target project; created if it doesn't exist" },
+        description: { type: "string" },
+        color: { type: "string", description: "hex like #8b7cf6" },
+        notes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              body: { type: "string", description: "markdown; use [[wikilinks]] to other note titles" },
+              type: { type: "string", enum: [...CONTENT_TYPES] },
+            },
+            required: ["title", "body"],
+          },
+        },
+        mocTitle: { type: "string", description: "title for a Map-of-Content index note (recommended)" },
+        connectTo: { type: "array", items: { type: "string" }, description: "project names/ids to connect" },
+        replace: { type: "boolean", description: "wipe the project's existing items first (owner/executive only)" },
+        actor: { type: "string", description: "who is importing (ignored when authenticated)" },
+      },
+      required: ["projectName", "notes"],
+    },
+    handler: async (a, ctx) => {
+      const parsed = importSchema.safeParse(a);
+      if (!parsed.success) throw new Error(`invalid import: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+      // Destructive path needs authority; additive imports need none beyond the
+      // connection itself (same trust level as append_update).
+      if (parsed.data.replace) requireApprover(ctx);
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const result = await importProject(parsed.data);
+      await prisma.auditEvent.create({
+        data: {
+          action: "import_notes",
+          actor,
+          target: result.projectId,
+          detail: `${result.noteCount} notes into "${parsed.data.projectName}"${parsed.data.replace ? " (replace)" : ""}`,
+        },
+      });
+      return { ...result, by: actor };
     },
   },
   {

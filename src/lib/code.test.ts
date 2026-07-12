@@ -13,6 +13,15 @@ describe("isValidRepoPath", () => {
     expect(isValidRepoPath("packages/@scope/pkg/index.js")).toBe(true);
   });
 
+  it("accepts framework-standard route segments", () => {
+    expect(isValidRepoPath("src/app/api/items/[id]/route.ts")).toBe(true);
+    expect(isValidRepoPath("src/app/[...slug]/page.tsx")).toBe(true);
+    expect(isValidRepoPath("src/app/(dashboard)/layout.tsx")).toBe(true);
+    expect(isValidRepoPath("src/routes/+page.svelte")).toBe(true);
+    // ...but a bare ".." segment is still traversal even with the wider charset
+    expect(isValidRepoPath("src/[id]/../secrets")).toBe(false);
+  });
+
   it("rejects traversal, absolute paths, and junk", () => {
     expect(isValidRepoPath("../secrets.txt")).toBe(false);
     expect(isValidRepoPath("src/../../etc/passwd")).toBe(false);

@@ -14,7 +14,10 @@ export const ACTIVE_WORK_STATUSES = ["planning", "in_progress", "in_review"] as 
 
 // A safe repo-relative path: forward slashes, no traversal, no absolute paths,
 // no exotic characters. Windows separators are normalized before validation.
-const SEGMENT_RE = /^[A-Za-z0-9._@-]+$/;
+// Brackets/parens/plus are framework-standard (Next.js "[id]" and "(group)",
+// SvelteKit "+page.svelte", parallel-route "@modal") — allowed; traversal
+// safety comes from the separate ".." segment check, not the charset.
+const SEGMENT_RE = /^[A-Za-z0-9._@+()[\]-]+$/;
 
 export function normalizeRepoPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/");

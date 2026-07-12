@@ -101,6 +101,20 @@ Daily-use tools win on friction, not features. OpenVault's loop costs the develo
 
 And the "coffee question" — *what did everyone's agents do since yesterday?* — is one call: `get_recent_activity` returns every item, work intent, and audit action from the last N hours, attributed and grouped. Ask your agent "what happened in the vault yesterday?" and it answers from data, not memory.
 
+## Token economics — query a small graph instead of re-reading big files
+
+| Instead of… | The agent does… | Saving |
+| --- | --- | --- |
+| Re-exploring the repo/history every cold start (20–50k tokens) | Reads the ~400-token briefing the SessionStart hook injected | The big one — every session |
+| Re-reading files to learn "what changed since yesterday" | `get_recent_activity` — one compact, attributed digest | 10–100× on that question |
+| Pulling and grepping a teammate's repo | `get_code_map` (paths + hashes only) → `read_code` for the one file needed | Reads 1 file instead of 20 |
+| Scrolling old transcripts for "what did we decide about X" | `search` / `read_item` → one short cited note | Grows with your history |
+| Reading many notes to find the relevant one | `topLinked` / `get_links` / `find_path` — navigate the graph, then read one | Same pattern as graph-based code tools |
+
+Two properties keep the vault itself cheap: the briefing is **templated and deterministic** (zero LLM tokens to produce), and the inferred-connections layer (related notes, project bridges, topic clusters) is **pure TF-IDF math** — no model calls to build or maintain the knowledge layer.
+
+Honest fine print: connecting the MCP server loads ~30 tool schemas into each session (a few thousand tokens of overhead — any real working session earns it back on the first avoided file-read); savings depend on the agent asking the vault before grepping (the connect-kit `CLAUDE.md` steers this); and on very large vaults prefer `topLinked`/`get_links` over a full `get_graph`.
+
 ## Accounts & roles — the team walkthrough
 
 1. **You (owner)** sign in with `APP_PASSWORD` → **Accounts**.

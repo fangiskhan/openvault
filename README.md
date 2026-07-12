@@ -4,6 +4,8 @@ A self-hosted project hub that your team and its AI agents share over MCP. An ag
 
 A concrete run: your agent finishes a task and files a cross-project blocker. Your colleague's agent starts cold an hour later, calls `get_attention`, sees the blocker with the error text and the project it belongs to, and picks it up. You and your colleague never spoke.
 
+A live instance runs at [openvault-hub.vercel.app](https://openvault-hub.vercel.app) (password-gated, as every deployed vault is). Self-hosting your own takes about five minutes; see [Quick start](#quick-start-local).
+
 Notes, tasks, risks, meeting minutes and spreadsheets live inside projects. Connect two projects and wikilinks, search and the graph cross the boundary. Each project also carries a code mirror and a work board, so agents read current code and see each other's in-flight changes without pulling GitHub. Run it on your own machine, your own server, or Vercel. Your data stays where you put it.
 
 Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 31 MCP tools for reading and writing state, code, and coordination. 56 automated tests cover the rules engine, the similarity engine, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
@@ -76,11 +78,12 @@ Each write carries the account or declared actor and lands in the audit log. Pat
 
 ## The daily loop
 
-Download three files per project from the Connect agent modal and the loop runs without anyone remembering it:
+Download three files per project from the Connect agent modal (plus a vault-wide ingest skill, below) and the loop runs without anyone remembering it:
 
 - `CLAUDE.md` (repo root) tells each agent session to read state first, announce before editing, sync and submit for review after, and log a handover.
 - A `.claude/settings.json` hook curls `GET /api/brief/<projectId>` at session start. The plain-text briefing (headline, attention, active work, recent changes) lands in the session's context before you type. The same `curl` works on Windows and unix.
 - A `post-commit` git hook syncs each commit's changed files into the code mirror, attributed to `post-commit-hook`.
+- The vault-ingest skill (`/api/connect-kit?file=ingest-skill`, saved to `~/.claude/skills/vault-ingest/`) teaches any agent to split a transcript, doc, or export into atomic linked notes and call `import_notes`. The instructions live on your server; the splitting runs on the visitor's agent.
 
 For "what did everyone's agents do since yesterday", `get_recent_activity` returns each item, work intent and audit action from the last N hours, grouped and attributed.
 
@@ -126,15 +129,14 @@ Local, offline, file-on-disk. On first run, click Load demo data for three linke
 
 ## Deploy to Vercel
 
-Local dev stays on SQLite; deploys use Postgres. The repo generates the Postgres schema at build time, so you never edit `schema.prisma` by hand.
+Local dev stays on SQLite; deploys use Postgres. The `vercel-build` script generates the Postgres schema, provisions the tables (`prisma db push` over the unpooled URL), and builds, so you never edit `schema.prisma` or run migrations by hand.
 
-1. Create a Postgres database (Neon, Supabase, or Vercel Postgres; each has a free tier).
-2. From your machine, provision the tables once:
-   ```bash
-   DATABASE_URL="<your postgres url>" npm run pg:push
-   ```
-3. In Vercel, set `DATABASE_URL`, `APP_PASSWORD`, `AUTH_SECRET`, `MCP_TOKEN`, `STORAGE_DRIVER=vercel` and `BLOB_READ_WRITE_TOKEN` (create a Blob store for uploads).
-4. Deploy. Vercel runs the repo's `vercel-build` script, which regenerates the Postgres schema and client before `next build`.
+1. Link the repo: `npx vercel link`, or import it in the Vercel dashboard.
+2. In the project's Storage tab, create a Neon Postgres and connect it. Vercel injects `DATABASE_URL` and its variants; the values are write-only, which is fine because the build reads them where they live.
+3. Set `APP_PASSWORD`, `AUTH_SECRET` and `MCP_TOKEN` for Production. If you add them by piping into `vercel env add` on Windows, strip the trailing newline first or the values will fail comparison at runtime.
+4. Deploy: `npx vercel --prod`.
+5. If Vercel Authentication (Deployment Protection) wraps your production URL in Vercel SSO, switch it off or scope it to previews in Settings → Deployment Protection. The app carries its own password gate and refuses to boot open.
+6. For uploads, create a Blob store and set `STORAGE_DRIVER=vercel` plus `BLOB_READ_WRITE_TOKEN`. Everything else works without it.
 
 Vercel Hobby is non-commercial under Vercel's terms; companies need Pro or should self-host.
 

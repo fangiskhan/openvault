@@ -1012,11 +1012,15 @@ export default function AppShell() {
                   <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=hooks`} title="Merge into .claude/settings.json — injects the briefing at session start">
                     Hooks
                   </a>
+                  <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=commit-hook`} title="Save as .git/hooks/post-commit — every commit auto-syncs its files to the code mirror">
+                    Git hook
+                  </a>
                 </div>
               ))}
               <p className="empty" style={{ marginTop: 6 }}>
                 <code>CLAUDE.md</code> → repo root · <code>Hooks</code> → merge into <code>.claude/settings.json</code>{" "}
-                (its SessionStart hook curls this vault&apos;s plain-text briefing into the session&apos;s context).
+                (SessionStart injects this vault&apos;s briefing) · <code>Git hook</code> → save as{" "}
+                <code>.git/hooks/post-commit</code> (each commit auto-syncs its changed files to the code mirror).
               </p>
             </div>
           </div>

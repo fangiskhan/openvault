@@ -31,7 +31,7 @@ The common thread: **the current status is already in OpenVault, so you read it 
 - **Excel & CSV upload** — parsed into searchable, previewable tables (size-capped, path-safe)
 - **Status & attention** — a deterministic engine flags overdue / blocked / open-risk / due-soon / stale items (each cited to a source), rolls them into a **RAG status** per project and across connected projects, and shows a manual override alongside the computed one
 - **Cited briefing** — a one-screen status summary built only from real items; every line clicks through to its source. Deterministic and **zero-token**.
-- **AI agents over MCP** — 25 tools: agents read status, write updates, share code, and coordinate work (see below)
+- **AI agents over MCP** — 28 tools: agents read status, write updates, traverse the knowledge graph, share code, and coordinate work (see below)
 - **Shared code mirror + work announcements** — agents push file snapshots and declare intents; other agents browse the code and get conflict warnings before touching the same files
 - **Multi-user accounts** — request → approve → connect, with roles (owner / executive / member), per-account bearer tokens stored **only as SHA-256 hashes** (shown once, regenerate from the UI), **per-account web login** (username + token; sessions carry that account's authority, never more), and an append-only **audit trail** of every approval, role change, login, and agent write
 - **Code tab** — humans browse the agent-synced code mirror and the live work board; owners/executives approve or request changes on in-review work right from the UI
@@ -59,11 +59,12 @@ claude mcp add --transport http openvault http://localhost:6900/api/mcp \
 
 (Drop the `--header` entirely for open local use with no `MCP_TOKEN` set.)
 
-**Tools (25):**
+**Tools (28):**
 
 | Group | Tools |
 | --- | --- |
 | Read | `list_projects` · `get_status` · `get_attention` · `get_briefing` · `get_recent_activity` · `search` · `read_item` · `get_inbox` |
+| Knowledge graph | `get_graph` (nodes + edges + most-connected concepts) · `get_links` (one note's neighborhood) · `find_path` (shortest wikilink chain between two notes) |
 | Write (attributed) | `set_status` · `append_update` · `flag_issue` (cross-project blocker) · `request_info` |
 | **Code & coordination** | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
 | Identity & admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |
@@ -95,6 +96,7 @@ Daily-use tools win on friction, not features. OpenVault's loop costs the develo
 
 - **`CLAUDE.md`** (repo root) — teaches every agent session the full loop: read state → check active work → announce → work → sync → submit for review → hand over.
 - **`.claude/settings.json` hooks** — a `SessionStart` hook that curls `GET /api/brief/<projectId>`: a **plain-text** briefing (headline, attention, active work, recent changes) injected straight into the session's context. Every session starts already knowing the project — zero tool calls, zero tokens spent querying, no JSON escaping in the hook command, same `curl` on Windows and unix.
+- **`post-commit` git hook** — every commit auto-syncs its changed files into the code mirror (`sync_code`, attributed to `post-commit-hook`), so other agents always browse current code even when nobody remembers to sync.
 
 And the "coffee question" — *what did everyone's agents do since yesterday?* — is one call: `get_recent_activity` returns every item, work intent, and audit action from the last N hours, attributed and grouped. Ask your agent "what happened in the vault yesterday?" and it answers from data, not memory.
 

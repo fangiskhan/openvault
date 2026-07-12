@@ -49,6 +49,65 @@ export async function GET(req: Request) {
     });
   }
 
+  if (file === "commit-hook") {
+    const hook = `#!/usr/bin/env node
+// OpenVault post-commit hook — auto-syncs each commit's changed files into the
+// project's code mirror, so other agents always browse current code with no one
+// remembering to sync. Install: save as .git/hooks/post-commit (no extension)
+// and make it executable (chmod +x on unix). Set OPENVAULT_TOKEN in your env
+// when the server requires auth. Generated for project "${project.name}".
+const { execSync } = require("node:child_process");
+const { readFileSync } = require("node:fs");
+
+const VAULT = "${base}";
+const PROJECT_ID = "${project.id}";
+const MAX_CHARS = 200000;
+
+function sh(cmd) { return execSync(cmd, { encoding: "utf8" }).trim(); }
+
+async function main() {
+  const status = sh("git diff-tree --no-commit-id --name-status -r HEAD");
+  if (!status) return;
+  const ref = sh("git rev-parse --abbrev-ref HEAD") + " @ " + sh("git rev-parse --short HEAD");
+  const files = [];
+  const deletes = [];
+  for (const line of status.split("\\n")) {
+    const [flag, ...rest] = line.split("\\t");
+    const path = rest[rest.length - 1];
+    if (!path) continue;
+    if (flag === "D") { deletes.push(path); continue; }
+    try {
+      const content = readFileSync(path, "utf8");
+      if (content.length <= MAX_CHARS && !content.includes("\\u0000")) files.push({ path, content });
+    } catch { /* binary or unreadable — skip */ }
+  }
+  if (!files.length && !deletes.length) return;
+
+  const headers = { "content-type": "application/json" };
+  if (process.env.OPENVAULT_TOKEN) headers.authorization = "Bearer " + process.env.OPENVAULT_TOKEN;
+  const res = await fetch(VAULT + "/api/mcp", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "sync_code", arguments: { projectId: PROJECT_ID, ref, files: files.slice(0, 100), deletes, actor: "post-commit-hook" } },
+    }),
+  });
+  console.log(res.ok
+    ? "openvault: mirror synced (" + files.length + " file(s), " + deletes.length + " delete(s), " + ref + ")"
+    : "openvault: sync failed (HTTP " + res.status + ") — mirror may be stale");
+}
+
+main().catch((e) => console.log("openvault: sync skipped — " + e.message));
+`;
+    return new Response(hook, {
+      headers: {
+        "content-type": "text/javascript; charset=utf-8",
+        "content-disposition": `attachment; filename="post-commit"`,
+      },
+    });
+  }
+
   const claude = `# Project state lives in OpenVault — read and write it via MCP
 
 This project's status, decisions, risks, open tasks, shared code mirror, and

@@ -747,6 +747,135 @@ export const tools: Tool[] = [
       };
     },
   },
+
+  // ---- Knowledge-graph traversal (notes + wikilinks) ----
+  {
+    name: "get_graph",
+    description:
+      "The project's knowledge graph: note nodes (with link degree) and resolved wikilink edges, plus topLinked — the most-connected notes (the project's central concepts). Traverse from there with get_links / find_path.",
+    inputSchema: {
+      type: "object",
+      properties: { projectId: { type: "string" }, scope: scopeProp },
+      required: ["projectId"],
+    },
+    handler: async (a) => {
+      const { projectId, scope } = a as { projectId: string; scope?: string };
+      const projectIds = await scopeProjectIds(projectId, scope ?? "project");
+      const items = await prisma.item.findMany({
+        where: { type: { in: [...CONTENT_TYPES] }, ...(projectIds ? { projectId: { in: projectIds } } : {}) },
+        select: { id: true, title: true, type: true, project: { select: { name: true } } },
+      });
+      const ids = new Set(items.map((i) => i.id));
+      const links = await prisma.link.findMany({
+        where: { fromItemId: { in: [...ids] }, toItemId: { not: null } },
+        select: { fromItemId: true, toItemId: true },
+      });
+      const edges = links.filter((l) => l.toItemId && ids.has(l.toItemId));
+      const degree = new Map<string, number>();
+      for (const e of edges) {
+        degree.set(e.fromItemId, (degree.get(e.fromItemId) ?? 0) + 1);
+        degree.set(e.toItemId!, (degree.get(e.toItemId!) ?? 0) + 1);
+      }
+      const nodes = items.map((i) => ({
+        itemId: i.id,
+        title: i.title,
+        type: i.type,
+        project: i.project.name,
+        degree: degree.get(i.id) ?? 0,
+      }));
+      return {
+        nodeCount: nodes.length,
+        edgeCount: edges.length,
+        topLinked: [...nodes].sort((x, y) => y.degree - x.degree).slice(0, 10),
+        nodes,
+        edges: edges.map((e) => ({ from: e.fromItemId, to: e.toItemId })),
+      };
+    },
+  },
+  {
+    name: "get_links",
+    description:
+      "One note's neighborhood: outgoing wikilinks (incl. unresolved ghosts) and backlinks (what points here). The single-step traversal primitive — follow ids with read_item or another get_links.",
+    inputSchema: { type: "object", properties: { itemId: { type: "string" } }, required: ["itemId"] },
+    handler: async (a) => {
+      const { itemId } = a as { itemId: string };
+      const item = await prisma.item.findUnique({
+        where: { id: itemId },
+        select: {
+          id: true,
+          title: true,
+          outLinks: { select: { targetTitle: true, toItem: { select: { id: true, title: true, projectId: true } } } },
+          inLinks: { select: { fromItem: { select: { id: true, title: true, projectId: true } } } },
+        },
+      });
+      if (!item) throw new Error("item not found");
+      return {
+        itemId: item.id,
+        title: item.title,
+        links: item.outLinks.map((l) => ({
+          target: l.targetTitle,
+          itemId: l.toItem?.id ?? null,
+          title: l.toItem?.title ?? null,
+          unresolved: !l.toItem,
+        })),
+        backlinks: item.inLinks.map((l) => ({ itemId: l.fromItem.id, title: l.fromItem.title })),
+      };
+    },
+  },
+  {
+    name: "find_path",
+    description:
+      "Shortest wikilink path between two notes (undirected, across connected projects) — how two concepts relate through the notes that join them. Returns the chain of notes or pathFound=false.",
+    inputSchema: {
+      type: "object",
+      properties: { fromItemId: { type: "string" }, toItemId: { type: "string" } },
+      required: ["fromItemId", "toItemId"],
+    },
+    handler: async (a) => {
+      const { fromItemId, toItemId } = a as { fromItemId: string; toItemId: string };
+      const from = await prisma.item.findUnique({ where: { id: fromItemId }, select: { projectId: true } });
+      if (!from) throw new Error("fromItemId not found");
+      const projectIds = await scopeProjectIds(from.projectId, "connected");
+      const items = await prisma.item.findMany({
+        where: projectIds ? { projectId: { in: projectIds } } : {},
+        select: { id: true, title: true },
+      });
+      const titleOf = new Map(items.map((i) => [i.id, i.title]));
+      const links = await prisma.link.findMany({
+        where: { fromItemId: { in: [...titleOf.keys()] }, toItemId: { not: null } },
+        select: { fromItemId: true, toItemId: true },
+      });
+      const adj = new Map<string, string[]>();
+      for (const l of links) {
+        if (!titleOf.has(l.toItemId!)) continue;
+        (adj.get(l.fromItemId) ?? adj.set(l.fromItemId, []).get(l.fromItemId)!).push(l.toItemId!);
+        (adj.get(l.toItemId!) ?? adj.set(l.toItemId!, []).get(l.toItemId!)!).push(l.fromItemId);
+      }
+      // BFS, undirected.
+      const prev = new Map<string, string>();
+      const queue = [fromItemId];
+      const seen = new Set([fromItemId]);
+      while (queue.length) {
+        const cur = queue.shift()!;
+        if (cur === toItemId) {
+          const path: string[] = [];
+          for (let n = toItemId; ; n = prev.get(n)!) {
+            path.unshift(n);
+            if (n === fromItemId) break;
+          }
+          return { pathFound: true, hops: path.length - 1, path: path.map((id) => ({ itemId: id, title: titleOf.get(id) ?? "?" })) };
+        }
+        for (const next of adj.get(cur) ?? []) {
+          if (!seen.has(next)) {
+            seen.add(next);
+            prev.set(next, cur);
+            queue.push(next);
+          }
+        }
+      }
+      return { pathFound: false, hint: "no wikilink chain connects these notes within connected projects" };
+    },
+  },
 ];
 
 export const toolMap = new Map(tools.map((t) => [t.name, t]));

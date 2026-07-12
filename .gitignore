@@ -52,3 +52,6 @@ next-env.d.ts
 
 # local backups (npm run db:backup)
 /backups/
+
+# generated at deploy time from schema.prisma (npm run pg:schema)
+/prisma/schema.postgres.prisma

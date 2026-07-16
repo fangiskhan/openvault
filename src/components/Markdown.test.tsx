@@ -5,7 +5,7 @@ import Markdown from "./Markdown";
 // Regression: react-markdown's default URL sanitizer used to blank out our
 // `wikilink:` scheme, so every [[wikilink]] rendered as a dead <a href="">
 // (which opened a blank tab on click) instead of the intended <button>.
-const render = (body: string, resolve = (_: string) => true) =>
+const render = (body: string, resolve: (title: string) => boolean = () => true) =>
   renderToStaticMarkup(<Markdown body={body} resolve={resolve} onWikilink={() => {}} />);
 
 describe("Markdown wikilinks", () => {

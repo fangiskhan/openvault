@@ -96,21 +96,21 @@ export default function AppShell() {
   const [showConnect, setShowConnect] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status" | "code">("notes");
-  const [related, setRelated] = useState<RelatedNote[]>([]);
   // Inferred connections for the open note — notes that belong together but
-  // were never wikilinked. Debounced fetch keyed to the open item.
+  // were never wikilinked. Suggestions are keyed to the note they were fetched
+  // for, so switching notes derives back to empty without effect-body setState.
+  const [related, setRelated] = useState<{ forItem: string; suggestions: RelatedNote[] } | null>(null);
+  const relatedNotes = item && related?.forItem === item.id ? related.suggestions : [];
   useEffect(() => {
-    if (!item) {
-      setRelated([]);
-      return;
-    }
+    if (!item) return;
     let live = true;
+    const id = item.id;
     const t = setTimeout(async () => {
       try {
-        const r = await api(`/api/related?itemId=${item.id}`);
-        if (live) setRelated(r.suggestions ?? []);
+        const r = await api(`/api/related?itemId=${id}`);
+        if (live) setRelated({ forItem: id, suggestions: r.suggestions ?? [] });
       } catch {
-        if (live) setRelated([]);
+        if (live) setRelated({ forItem: id, suggestions: [] });
       }
     }, 300);
     return () => {
@@ -128,7 +128,9 @@ export default function AppShell() {
   }, []);
 
   const [showConnectAgent, setShowConnectAgent] = useState(false);
-  const [origin, setOrigin] = useState("");
+  // Lazy init instead of an effect: only read inside the connect modal, which
+  // opens post-hydration, so the SSR fallback never reaches the DOM.
+  const [origin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [copied, setCopied] = useState<string | null>(null);
 
   const dirty = useRef(false);
@@ -142,10 +144,6 @@ export default function AppShell() {
   useEffect(() => {
     latest.current = { item, title, bodyDraft };
   }, [item, title, bodyDraft]);
-
-  useEffect(() => {
-    setOrigin(window.location.origin);
-  }, []);
 
   // Surface failures instead of swallowing them — a failed mutation must never
   // look identical to success in a source-of-truth tool.
@@ -269,13 +267,11 @@ export default function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [title, bodyDraft]);
 
-  // Search (debounced).
+  // Search (debounced). Clearing on empty input happens in the onChange
+  // handler, so this effect only ever schedules the fetch callback.
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    if (!query.trim()) {
-      setResults(null);
-      return;
-    }
+    if (!query.trim()) return;
     searchTimer.current = setTimeout(async () => {
       const params = new URLSearchParams({ q: query, scope });
       if (activeProjectId) params.set("projectId", activeProjectId);
@@ -527,7 +523,11 @@ export default function AppShell() {
             className="input"
             placeholder="Search…  (⌘K)"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setQuery(v);
+              if (!v.trim()) setResults(null);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 setQuery("");
@@ -887,10 +887,10 @@ export default function AppShell() {
                   ))
                 )}
               </div>
-              {related.length > 0 && (
+              {relatedNotes.length > 0 && (
                 <div className="rail-section">
                   <h4>Related (inferred)</h4>
-                  {related.map((r) => (
+                  {relatedNotes.map((r) => (
                     <button
                       key={r.itemId}
                       className="rail-link"

@@ -46,8 +46,22 @@ export default function AccountsAdmin() {
     }
   }, []);
   useEffect(() => {
-    load();
-  }, [load]);
+    // Initial load, with all setState confined to promise callbacks.
+    let live = true;
+    Promise.all([api("/api/accounts"), api("/api/audit").catch(() => [])])
+      .then(([a, ev]) => {
+        if (!live) return;
+        setAccounts(a);
+        setAudit(ev);
+        setErr(null);
+      })
+      .catch(() => {
+        if (live) setErr("Not authorized — sign in as the owner (APP_PASSWORD) or an executive to manage accounts.");
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const approve = async (id: string) => {
     setBusy(id);

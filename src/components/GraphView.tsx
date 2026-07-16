@@ -36,26 +36,36 @@ export default function GraphView({
   onOpen: (id: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [data, setData] = useState<GraphData | null>(null);
   const [gscope, setGscope] = useState(scope);
+  // Fetched graph is keyed by its query, so switching project/scope shows the
+  // loading state by derivation — no setState in the effect body needed.
+  const fetchKey = `${projectId}|${gscope}`;
+  const [fetched, setFetched] = useState<{ key: string; graph: GraphData } | null>(null);
+  const data = fetched?.key === fetchKey ? fetched.graph : null;
   // Hidden projects (by id). Kept in a ref too so the animation loop reads the
   // latest set without restarting the simulation (toggling never reshuffles).
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const hiddenRef = useRef(hidden);
-  hiddenRef.current = hidden;
+  useEffect(() => {
+    hiddenRef.current = hidden;
+  }, [hidden]);
   const onOpenRef = useRef(onOpen);
-  onOpenRef.current = onOpen;
+  useEffect(() => {
+    onOpenRef.current = onOpen;
+  }, [onOpen]);
   // Lets outside events (a project toggle) re-energize and re-draw the frozen sim.
   const reheatRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setData(null);
-    setHidden(new Set());
     fetch(`/api/graph?projectId=${encodeURIComponent(projectId)}&scope=${gscope}`)
       .then((r) => r.json())
-      .then((d: GraphData) => !cancelled && setData(d))
-      .catch(() => !cancelled && setData({ nodes: [], edges: [], projects: [] }));
+      .then((d: GraphData) => {
+        if (cancelled) return;
+        setFetched({ key: `${projectId}|${gscope}`, graph: d });
+        setHidden(new Set());
+      })
+      .catch(() => !cancelled && setFetched({ key: `${projectId}|${gscope}`, graph: { nodes: [], edges: [], projects: [] } }));
     return () => {
       cancelled = true;
     };

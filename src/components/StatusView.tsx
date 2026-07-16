@@ -38,15 +38,25 @@ export default function StatusView({
   scope: string;
   onOpen: (id: string) => void;
 }) {
-  const [status, setStatus] = useState<StatusResp | null>(null);
-  const [signals, setSignals] = useState<Signal[] | null>(null);
-  const [briefing, setBriefing] = useState<Briefing | null>(null);
-  const [loading, setLoading] = useState(true);
+  // The payload is keyed by its query: switching project/scope derives back to
+  // "loading" without any setState in the effect body.
+  const key = `${projectId}|${scope}`;
+  const [payload, setPayload] = useState<{
+    key: string;
+    status: StatusResp | null;
+    signals: Signal[] | null;
+    briefing: Briefing | null;
+  } | null>(null);
+  const fresh = payload?.key === key ? payload : null;
+  const loading = !fresh;
+  const status = fresh?.status ?? null;
+  const signals = fresh?.signals ?? null;
+  const briefing = fresh?.briefing ?? null;
 
   useEffect(() => {
     let cancel = false;
-    setLoading(true);
     const qs = `projectId=${encodeURIComponent(projectId)}&scope=${scope}`;
+    const k = `${projectId}|${scope}`;
     Promise.all([
       fetch(`/api/status?${qs}`).then((r) => r.json()),
       fetch(`/api/attention?${qs}`).then((r) => r.json()),
@@ -54,12 +64,9 @@ export default function StatusView({
     ])
       .then(([s, a, b]) => {
         if (cancel) return;
-        setStatus(s);
-        setSignals(a.signals ?? []);
-        setBriefing(b);
-        setLoading(false);
+        setPayload({ key: k, status: s, signals: a.signals ?? [], briefing: b });
       })
-      .catch(() => !cancel && setLoading(false));
+      .catch(() => !cancel && setPayload({ key: k, status: null, signals: [], briefing: null }));
     return () => {
       cancel = true;
     };

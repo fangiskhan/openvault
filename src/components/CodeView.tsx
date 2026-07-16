@@ -34,7 +34,10 @@ const STATUS_COLOR: Record<string, string> = {
 export default function CodeView({ projectId, canReview, onError }: { projectId: string; canReview: boolean; onError: (msg: string) => void }) {
   const [work, setWork] = useState<{ active: WorkItem[]; recentlyDone: WorkItem[] } | null>(null);
   const [files, setFiles] = useState<CodeFileMeta[]>([]);
-  const [file, setFile] = useState<CodeFileFull | null>(null);
+  // The open file is keyed to its project: switching projects derives back to
+  // "nothing open" without a setState in the load effect.
+  const [opened, setOpened] = useState<{ forProject: string; file: CodeFileFull } | null>(null);
+  const file = opened?.forProject === projectId ? opened.file : null;
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -51,13 +54,26 @@ export default function CodeView({ projectId, canReview, onError }: { projectId:
   }, [projectId, onError]);
 
   useEffect(() => {
-    setFile(null);
-    load();
-  }, [load]);
+    // Initial load, with all setState confined to promise callbacks.
+    let live = true;
+    Promise.all([api(`/api/work?projectId=${projectId}`), api(`/api/code?projectId=${projectId}`)])
+      .then(([w, c]) => {
+        if (!live) return;
+        setWork(w);
+        setFiles(c.files);
+      })
+      .catch(() => {
+        if (live) onError("Couldn't load the code board.");
+      });
+    return () => {
+      live = false;
+    };
+  }, [projectId, onError]);
 
   const openFile = async (path: string) => {
     try {
-      setFile(await api(`/api/code?projectId=${projectId}&path=${encodeURIComponent(path)}`));
+      const f = await api(`/api/code?projectId=${projectId}&path=${encodeURIComponent(path)}`);
+      setOpened({ forProject: projectId, file: f });
     } catch {
       onError("Couldn't read that file from the mirror.");
     }

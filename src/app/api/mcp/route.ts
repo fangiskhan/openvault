@@ -106,8 +106,22 @@ export async function POST(req: Request) {
     case "tools/call": {
       const tool = params?.name ? toolMap.get(params.name) : undefined;
       if (!tool) return error(id, -32602, `unknown tool: ${params?.name}`);
+      // Enforce each tool's declared required arguments. Without this, a
+      // malformed call (e.g. `q` instead of `query`) reaches the handler as
+      // undefined and can return a plausible empty result — the agent then
+      // concludes "the vault has nothing" instead of fixing its call.
+      const args = (params?.arguments ?? {}) as Record<string, unknown>;
+      const required = ((tool.inputSchema as { required?: string[] }).required ?? []).filter(
+        (k) => args[k] === undefined,
+      );
+      if (required.length) {
+        return result(id, {
+          content: [{ type: "text", text: `Error: missing required argument(s): ${required.join(", ")}` }],
+          isError: true,
+        });
+      }
       try {
-        const out = await tool.handler(params?.arguments ?? {}, ctx);
+        const out = await tool.handler(args, ctx);
         return result(id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
       } catch (e) {
         return result(id, {

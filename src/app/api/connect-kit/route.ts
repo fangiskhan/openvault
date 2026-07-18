@@ -18,6 +18,43 @@ export async function GET(req: Request) {
   const file = url.searchParams.get("file") ?? "claude";
   const base = `${url.protocol}//${url.host}`;
 
+  // Vault-wide global CLAUDE.md: the "consult the vault before asking your
+  // human" standing orders, for ~/.claude/CLAUDE.md so EVERY session on the
+  // user's machine gets them — any folder, any project. A download, never an
+  // auto-write: a server that could silently edit a connecting user's files
+  // would be a prompt-injection hole, so placing it stays the human's choice.
+  if (file === "global-claude") {
+    const projects = await prisma.project.findMany({ orderBy: { name: "asc" }, select: { name: true } });
+    const names = projects.map((p) => p.name).join(", ") || "(none yet)";
+    const md = `# Project knowledge lives in OpenVault
+
+The \`openvault\` MCP server (${base}/api/mcp) is my source of truth for all my
+projects: ${names} — plus decisions, status, session history, and code mirrors.
+
+**Before asking me about any past project, decision, codebase detail, or "what
+did we do about X" — search the vault first:**
+
+- \`search {query, scope: "all"}\` for anything by keyword
+- \`get_briefing {projectId}\` for a project's current state
+- \`read_item {itemId}\` for the full note behind a search hit
+- \`get_code_map\` / \`read_code\` for the actual code in a project's mirror
+
+If the vault has no record, say so plainly rather than guessing, and only then
+ask me. When you learn something new and durable about a project during our
+conversation, write it back (\`append_update\`, or \`import_notes\` for bigger
+chunks) so the next session finds it.
+
+Not connected? \`claude mcp add openvault ${base}/api/mcp --transport http --scope user\`
+(add \`--header "Authorization: Bearer <ovk_ token>"\` when the server requires auth).
+`;
+    return new Response(md, {
+      headers: {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="CLAUDE.md"`,
+      },
+    });
+  }
+
   // The ingest skill is vault-wide (it discovers projects itself) — no projectId.
   if (file === "ingest-skill") {
     const skill = `---

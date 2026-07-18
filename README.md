@@ -84,6 +84,7 @@ Download three files per project from the Connect agent modal (plus a vault-wide
 - A `.claude/settings.json` hook curls `GET /api/brief/<projectId>` at session start. The plain-text briefing (headline, attention, active work, recent changes) lands in the session's context before you type. The same `curl` works on Windows and unix.
 - A `post-commit` git hook syncs each commit's changed files into the code mirror, attributed to `post-commit-hook`.
 - The vault-ingest skill (`/api/connect-kit?file=ingest-skill`, saved to `~/.claude/skills/vault-ingest/`) teaches any agent to split a transcript, doc, or export into atomic linked notes and call `import_notes`. The instructions live on your server; the splitting runs on the visitor's agent.
+- A global `CLAUDE.md` download (`/api/connect-kit?file=global-claude`, saved to `~/.claude/CLAUDE.md`) puts the vault-first rule into every session on your machine, any folder: search the vault before asking the human, admit "no record" instead of guessing, write back what you learn. The MCP server also sends this steering in its connect-time instructions, so connected agents get the rule even without the file; the file makes it stick across every surface. Connecting never modifies anyone's files: a server that could silently edit a client's standing orders would be an injection hole, so placing the file stays a human choice.
 
 For "what did everyone's agents do since yesterday", `get_recent_activity` returns each item, work intent and audit action from the last N hours, grouped and attributed.
 

@@ -1074,6 +1074,19 @@ export default function AppShell() {
                   Ingest skill
                 </a>
               </div>
+              <div className="copyrow">
+                <span className="truncate" style={{ flex: 1 }}>
+                  Vault-first everywhere — standing orders so every session searches the vault before asking you,
+                  in any folder
+                </span>
+                <a
+                  className="btn"
+                  href="/api/connect-kit?file=global-claude"
+                  title="Save as ~/.claude/CLAUDE.md (or append to it) — applies to all your Claude Code sessions"
+                >
+                  Global CLAUDE.md
+                </a>
+              </div>
             </div>
           </div>
         </div>

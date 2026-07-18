@@ -88,7 +88,7 @@ export async function POST(req: Request) {
         capabilities: { tools: {} },
         serverInfo: { name: "openvault", version: "0.1.0" },
         instructions:
-          "OpenVault shared project state. Read with get_status / get_attention / get_briefing / read_item / search; write with set_status and append_update so other agents see your changes. Code: announce_work before editing (returns overlap warnings), get_active_work to see who's changing what, sync_code your changed files when done, get_code_map / read_code to browse the shared mirror without pulling git. Merge gate: submit finished work with update_work status=in_review; an owner/executive reviews it with review_work — push to git only after approval.",
+          "OpenVault is this user's source of truth for ALL their projects (code, decisions, history, status). BEFORE asking the user about any past project, decision, codebase detail, or 'what did we do about X' — search this vault first (search / get_briefing / read_item); the answer is usually already recorded, and asking the user wastes their time and your tokens. Read with get_status / get_attention / get_briefing / get_recent_activity / read_item / search; write with set_status and append_update so other agents see your changes. Code: announce_work before editing (returns overlap warnings), get_active_work to see who's changing what, sync_code your changed files when done, get_code_map / read_code to browse the shared mirror without pulling git. Merge gate: submit finished work with update_work status=in_review; an owner/executive reviews it with review_work — push to git only after approval. If a search finds nothing, say the vault has no record rather than guessing.",
       });
 
     case "notifications/initialized":

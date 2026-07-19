@@ -76,6 +76,10 @@ With the vault:
 
 Each write carries the account or declared actor and lands in the audit log. Paths are validated against traversal; files cap at 200k characters, 100 per sync. The vault holds the merge decision and its provenance. Git performs the merge, and the server never holds your GitHub credentials.
 
+To mirror an existing repo in one shot, run `npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl]`. It uses `git ls-files` where it can, walks the tree with sane excludes where it can't, and refuses to upload `.env` files. Pair it with the post-commit hook and the mirror stays current from then on.
+
+Retrieval is blind-tested: an agent with no prior context, given only two questions about a mirrored project, read the source through the vault, answered both with file-level citations, and caught a factual error in a hand-written vault note by checking it against the code. Notes can be wrong; the mirrored source corrects them.
+
 ## The daily loop
 
 Download three files per project from the Connect agent modal (plus a vault-wide ingest skill, below) and the loop runs without anyone remembering it:

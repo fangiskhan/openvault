@@ -46,6 +46,7 @@ export async function POST(req: Request) {
     source: source ?? "local",
     sourceRef: sourceRef ?? null,
     metadata: JSON.stringify({ ingestedBy: by }),
+    updatedBy: by,
   };
 
   const existing = sourceRef
@@ -53,7 +54,7 @@ export async function POST(req: Request) {
     : null;
   const item = existing
     ? await prisma.item.update({ where: { id: existing.id }, data })
-    : await prisma.item.create({ data: { projectId, ...data } });
+    : await prisma.item.create({ data: { projectId, ...data, createdBy: by } });
 
   await syncItemLinks(item.id, projectId, item.body);
   await prisma.auditEvent.create({

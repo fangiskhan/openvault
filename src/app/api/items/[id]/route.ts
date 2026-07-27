@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { updateItemSchema } from "@/lib/validation";
 import { syncItemLinks, resolveGhostLinks } from "@/lib/links";
+import { actorFor } from "@/lib/actor";
 import { badRequest, notFound } from "@/lib/http";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -56,6 +57,9 @@ export async function GET(_req: Request, { params }: Ctx) {
     title: item.title,
     body: item.body,
     metadata: item.metadata ? JSON.parse(item.metadata) : null,
+    createdBy: item.createdBy,
+    updatedBy: item.updatedBy,
+    createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     links: item.outLinks.map((l) => ({ targetTitle: l.targetTitle, toItem: l.toItem })),
     backlinks: related,
@@ -73,7 +77,10 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const existing = await prisma.item.findUnique({ where: { id }, select: { projectId: true, title: true } });
   if (!existing) return notFound();
 
-  const item = await prisma.item.update({ where: { id }, data: parsed.data });
+  const item = await prisma.item.update({
+    where: { id },
+    data: { ...parsed.data, updatedBy: await actorFor(req) },
+  });
 
   if (parsed.data.body !== undefined) {
     await syncItemLinks(item.id, item.projectId, item.body);

@@ -24,7 +24,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "replace requires owner/executive authority" }, { status: 403 });
   }
 
-  const result = await importProject(parsed.data);
+  const result = await importProject({ ...parsed.data, actor: account?.username ?? "session" });
   await prisma.auditEvent.create({
     data: {
       action: "import_notes",

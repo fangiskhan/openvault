@@ -33,6 +33,9 @@ type ItemFull = {
   title: string;
   body: string;
   metadata: { sheets?: Sheet[] } | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+  createdAt: string;
   updatedAt: string;
   links: LinkRef[];
   backlinks: Backlink[];
@@ -741,6 +744,11 @@ export default function AppShell() {
               />
               <div className="meta-row">
                 <span>{item.project.name}</span>
+                <span>·</span>
+                <span title={`Created ${new Date(item.createdAt).toLocaleString()}${item.createdBy ? ` by ${item.createdBy}` : ""}`}>
+                  {item.updatedBy ? `${item.updatedBy} · ` : ""}
+                  {new Date(item.updatedAt).toLocaleDateString()}
+                </span>
                 <span>·</span>
                 <select value={item.type} onChange={(e) => patchItem({ type: e.target.value })} style={mini}>
                   {["note", "task", "risk", "meeting"].map((t) => (

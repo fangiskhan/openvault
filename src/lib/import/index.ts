@@ -1,6 +1,9 @@
 import { prisma } from "../db";
 import { slugify, uniqueSlug } from "../slug";
 import { syncItemLinks, resolveGhostLinks } from "../links";
+import { connectedProjectIds } from "../projects";
+import { buildCorpus, cosine } from "../related";
+import { CONTENT_TYPES } from "../validation";
 
 export type ImportNote = { title: string; body: string; type?: string };
 
@@ -12,6 +15,7 @@ export type ImportInput = {
   mocTitle?: string; // create a Map-of-Content note that wikilinks every imported note
   connectTo?: string[]; // project names or ids to connect to
   replace?: boolean; // wipe the project's existing items first
+  actor?: string; // who is importing — stamped on every created note
 };
 
 // Create Obsidian-style linked notes from content: one note per entry, an
@@ -35,18 +39,56 @@ function keywordsOf(text: string): Set<string> {
 }
 
 // Obsidian-style cross-linking: append a "## Related" section of [[wikilinks]]
-// to each note, pointing at the few notes it shares the most keywords with — so
-// the graph becomes a web, not a star. Cheap, deterministic, no AI.
-function withRelatedLinks(notes: ImportNote[], maxLinks = 3, minShared = 2): ImportNote[] {
-  if (notes.length < 3) return notes;
+// to each note. Two sources, one block:
+//   1. Other notes in the same batch, by shared keywords — so an import becomes
+//      a web rather than a star.
+//   2. Notes ALREADY in this project or a connected one, by TF-IDF similarity —
+//      so the import joins the graph that exists instead of landing as an
+//      island. Without this, a new note can only reach an existing topic hub if
+//      the agent happened to guess and type the right [[wikilink]].
+// Both are deterministic and cost no model calls.
+export function withRelatedLinks(
+  notes: ImportNote[],
+  existing: Array<{ title: string; body: string }> = [],
+  { maxInBatch = 3, minShared = 2, maxExisting = 2, minScore = 0.12 } = {},
+): ImportNote[] {
   const kw = notes.map((n) => keywordsOf(`${n.title} ${n.body}`));
+  const incomingTitles = new Set(notes.map((n) => n.title.toLowerCase()));
+  const simText = (t: string, b: string) => `${t}\n${t}\n${b.slice(0, 5000)}`;
+  // One corpus over incoming + existing, so an imported note can find the hub
+  // note that already covers its topic.
+  const corpus = existing.length
+    ? buildCorpus([
+        ...notes.map((n, i) => ({ id: `new:${i}`, projectId: "new", text: simText(n.title, n.body) })),
+        ...existing.map((e, j) => ({ id: `old:${j}`, projectId: "old", text: simText(e.title, e.body) })),
+      ])
+    : null;
+
   return notes.map((n, i) => {
-    const related = notes
-      .map((m, j) => ({ title: m.title, shared: j === i ? -1 : [...kw[i]].filter((w) => kw[j].has(w)).length }))
-      .filter((x) => x.shared >= minShared)
-      .sort((a, b) => b.shared - a.shared)
-      .slice(0, maxLinks)
-      .map((x) => x.title);
+    const inBatch =
+      notes.length < 3
+        ? []
+        : notes
+            .map((m, j) => ({ title: m.title, shared: j === i ? -1 : [...kw[i]].filter((w) => kw[j].has(w)).length }))
+            .filter((x) => x.shared >= minShared)
+            .sort((a, b) => b.shared - a.shared)
+            .slice(0, maxInBatch)
+            .map((x) => x.title);
+
+    const fromVault = corpus
+      ? existing
+          .map((e, j) => ({
+            title: e.title,
+            score: cosine(corpus.vectors.get(`new:${i}`)!, corpus.vectors.get(`old:${j}`)!),
+          }))
+          // A title also present in this batch is handled by the in-batch pass.
+          .filter((x) => x.score >= minScore && !incomingTitles.has(x.title.toLowerCase()))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, maxExisting)
+          .map((x) => x.title)
+      : [];
+
+    const related = [...new Set([...inBatch, ...fromVault])];
     // Strip any pre-existing "## Related" block(s) first, so re-ingesting a note
     // never stacks duplicate Related sections, then append the fresh one.
     const base = n.body.replace(/\n*##\s*Related\s*\n(?:[ \t]*-[^\n]*\n?)*/gi, "").trimEnd();
@@ -68,12 +110,40 @@ export async function importProject(input: ImportInput) {
     await prisma.item.deleteMany({ where: { projectId: project.id } });
   }
 
-  const notes = withRelatedLinks(input.notes);
+  // The graph this import should join: notes already in this project or a
+  // connected one. Projects named in connectTo count too — those relations are
+  // created below, before links are resolved, so links into them will land.
+  const connectTargets = input.connectTo?.length
+    ? (
+        await prisma.project.findMany({
+          where: { OR: [...input.connectTo.map((c) => ({ name: c })), ...input.connectTo.map((c) => ({ id: c }))] },
+          select: { id: true },
+        })
+      ).map((p) => p.id)
+    : [];
+  const scopeIds = [...new Set([...(await connectedProjectIds(project.id)), ...connectTargets])];
+  const existingNotes = await prisma.item.findMany({
+    where: { projectId: { in: scopeIds }, type: { in: [...CONTENT_TYPES] } },
+    select: { title: true, body: true },
+    orderBy: { updatedAt: "desc" },
+    take: 600,
+  });
 
+  const notes = withRelatedLinks(input.notes, existingNotes);
+
+  const by = input.actor || "import";
   const created: { id: string; body: string }[] = [];
   for (const n of notes) {
     const item = await prisma.item.create({
-      data: { projectId: project.id, title: n.title, body: n.body, type: n.type ?? "note", source: "import" },
+      data: {
+        projectId: project.id,
+        title: n.title,
+        body: n.body,
+        type: n.type ?? "note",
+        source: "import",
+        createdBy: by,
+        updatedBy: by,
+      },
     });
     created.push({ id: item.id, body: item.body });
   }
@@ -81,7 +151,7 @@ export async function importProject(input: ImportInput) {
   if (input.mocTitle && created.length) {
     const body = `# ${input.mocTitle}\n\n` + input.notes.map((n) => `- [[${n.title}]]`).join("\n");
     const moc = await prisma.item.create({
-      data: { projectId: project.id, title: input.mocTitle, body, type: "note", source: "import" },
+      data: { projectId: project.id, title: input.mocTitle, body, type: "note", source: "import", createdBy: by, updatedBy: by },
     });
     created.push({ id: moc.id, body: moc.body });
   }

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { saveBlob, safeStorageName } from "@/lib/storage";
+import { actorFor } from "@/lib/actor";
 import { parseSpreadsheet } from "@/lib/spreadsheet";
 import { syncItemLinks } from "@/lib/links";
 import { badRequest } from "@/lib/http";
@@ -43,8 +44,9 @@ export async function POST(req: Request) {
     body = `Spreadsheet **${file.name}** — ${sheets.length} sheet(s): ${sheets.map((s) => s.name).join(", ")}.`;
   }
 
+  const by = await actorFor(req);
   const item = await prisma.item.create({
-    data: { projectId, type, source: "upload", title: file.name, body, metadata },
+    data: { projectId, type, source: "upload", title: file.name, body, metadata, createdBy: by, updatedBy: by },
   });
   await prisma.fileAsset.create({
     data: {

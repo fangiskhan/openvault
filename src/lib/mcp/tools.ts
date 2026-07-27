@@ -174,7 +174,11 @@ export const tools: Tool[] = [
       // two agents writing the same item can't clobber each other. Provenance
       // (who set it, when) goes to the append-only audit log, not a mutable blob.
       const updated = await prisma.item
-        .update({ where: { id: itemId }, data: { status, closedAt }, select: { id: true, status: true, updatedAt: true } })
+        .update({
+          where: { id: itemId },
+          data: { status, closedAt, updatedBy: actor },
+          select: { id: true, status: true, updatedAt: true },
+        })
         .catch(() => null);
       if (!updated) throw new Error("item not found");
       await prisma.auditEvent.create({ data: { action: "set_status", actor, target: itemId, detail: status } });
@@ -203,6 +207,8 @@ export const tools: Tool[] = [
           title: `Status update — ${actor}`,
           body: text,
           metadata: JSON.stringify({ actor, via: "mcp" }),
+          createdBy: actor,
+          updatedBy: actor,
         },
         select: { id: true, createdAt: true },
       });
@@ -261,6 +267,8 @@ export const tools: Tool[] = [
           body: lines.join("\n"),
           assigneeAccountId,
           metadata: JSON.stringify({ actor, via: "mcp", kind: "cross_project_flag", flaggedFrom: fromProject || null, toAccount: toAccount || null }),
+          createdBy: actor,
+          updatedBy: actor,
         },
         select: { id: true, projectId: true, type: true, status: true, createdAt: true },
       });
@@ -302,6 +310,8 @@ export const tools: Tool[] = [
           body: `**Question for @${toAccount}** from ${from}:\n\n${question}`,
           assigneeAccountId: target.id,
           metadata: JSON.stringify({ actor: from, via: "mcp", kind: "info_request", toAccount }),
+          createdBy: from,
+          updatedBy: from,
         },
         select: { id: true, projectId: true, createdAt: true },
       });
@@ -957,7 +967,7 @@ export const tools: Tool[] = [
       // connection itself (same trust level as append_update).
       if (parsed.data.replace) requireApprover(ctx);
       const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
-      const result = await importProject(parsed.data);
+      const result = await importProject({ ...parsed.data, actor });
       await prisma.auditEvent.create({
         data: {
           action: "import_notes",

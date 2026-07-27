@@ -114,6 +114,11 @@ model Item {
   dueAt     DateTime?
   closedAt  DateTime?
   assigneeAccountId String? // account a flag/request is addressed to (simple inbox routing; no FK)
+  // Authorship, stored as plain usernames so the record survives a rename or a
+  // deleted account (same reasoning as AuditEvent). "who + when" on the note
+  // itself; the audit trail keeps the fuller history.
+  createdBy String?
+  updatedBy String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 

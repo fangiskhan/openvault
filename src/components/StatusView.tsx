@@ -31,13 +31,13 @@ const DOT = (c: string) => ({ width: 9, height: 9, borderRadius: "50%", backgrou
 
 export default function StatusView({
   projectId,
-  scope,
   onOpen,
 }: {
   projectId: string;
-  scope: string;
   onOpen: (id: string) => void;
 }) {
+  // Owns its scope, so changing it visibly rewrites the board you're reading.
+  const [scope, setScope] = useState("project");
   // The payload is keyed by its query: switching project/scope derives back to
   // "loading" without any setState in the effect body.
   const key = `${projectId}|${scope}`;
@@ -88,7 +88,17 @@ export default function StatusView({
         <h1 style={{ margin: 0, fontSize: 24, letterSpacing: "-0.02em" }}>{briefing?.headline.text ?? "Status"}</h1>
       </div>
       <div className="meta-row">
-        <span>Scope: {scope}</span>
+        <div className="scope">
+          {[
+            { key: "project", label: "This project" },
+            { key: "connected", label: "Connected" },
+            { key: "all", label: "All" },
+          ].map((s) => (
+            <button key={s.key} className={scope === s.key ? "on" : ""} onClick={() => setScope(s.key)}>
+              {s.label}
+            </button>
+          ))}
+        </div>
         {briefing && (
           <>
             <span>·</span>

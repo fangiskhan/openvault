@@ -20,7 +20,7 @@ Working v1: projects, status, cited briefings, multi-user accounts with roles an
 ## What works today
 
 - Projects with connections; rename, export and delete from the sidebar
-- Markdown notes with `[[wikilinks]]`, backlinks, and two graph views: a force-directed map, and an **arc diagram** where notes run left to right grouped by project and ordered by age, so every arc that leaves its colour band is a cross-project connection. Toggle the inferred layer to see the links nobody drew.
+- Markdown notes with `[[wikilinks]]`, backlinks, and an **arc diagram** of the whole vault: notes run left to right grouped by project and ordered by age, so every arc that leaves its colour band is a cross-project connection. Toggle the inferred layer to see the links nobody drew.
 - Ranked search scoped to one project, connected projects, or the whole vault. Ask in natural language: the query is tokenized and results rank by how many terms a note covers, so "why no server-side AI" finds the note that answers it. `"Quoted"` queries stay literal.
 - Excel and CSV upload, parsed into searchable tables
 - A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
 import SpreadsheetView, { type Sheet } from "./SpreadsheetView";
-import GraphView from "./GraphView";
 import ArcView from "./ArcView";
 import StatusView from "./StatusView";
 import AccountsAdmin from "./AccountsAdmin";
@@ -49,12 +48,6 @@ type SearchResult = {
   snippet: string;
 };
 
-const SCOPES = [
-  { key: "project", label: "This project" },
-  { key: "connected", label: "Connected" },
-  { key: "all", label: "All" },
-];
-
 const mini = {
   background: "var(--bg-elevated)",
   border: "1px solid var(--border)",
@@ -90,11 +83,13 @@ export default function AppShell() {
   const [mode, setMode] = useState<"read" | "edit">("read");
   const [save, setSave] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [toast, setToast] = useState<string | null>(null);
-  const [scope, setScope] = useState("project");
+  // Search spans the whole vault: results carry a project chip, so scoping it
+  // was a control that mostly hid your own notes. The Status and Graph views
+  // own their scope toggles, where changing it is immediately visible.
+  const scope = "all";
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [showGraph, setShowGraph] = useState(false);
-  const [graphMode, setGraphMode] = useState<"force" | "arcs">("force");
   const [showConnect, setShowConnect] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status" | "code">("notes");
@@ -584,13 +579,6 @@ export default function AppShell() {
             </div>
           )}
         </div>
-        <div className="scope">
-          {SCOPES.map((s) => (
-            <button key={s.key} className={scope === s.key ? "on" : ""} onClick={() => setScope(s.key)}>
-              {s.label}
-            </button>
-          ))}
-        </div>
         <div className="spacer" />
         {me?.username && me.kind !== "open" && (
           <button
@@ -738,7 +726,6 @@ export default function AppShell() {
           ) : view === "status" && activeProjectId ? (
             <StatusView
               projectId={activeProjectId}
-              scope={scope}
               onOpen={(id) => {
                 setView("notes");
                 openItem(id);
@@ -915,39 +902,19 @@ export default function AppShell() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <span>Graph</span>
-              <div className="scope" style={{ marginLeft: 14 }}>
-                <button className={graphMode === "force" ? "on" : ""} onClick={() => setGraphMode("force")}>
-                  Force
-                </button>
-                <button className={graphMode === "arcs" ? "on" : ""} onClick={() => setGraphMode("arcs")}>
-                  Arcs
-                </button>
-              </div>
               <div className="spacer" />
               <button className="btn-ghost" onClick={() => setShowGraph(false)}>
                 ✕
               </button>
             </div>
             <div className="modal-body">
-              {graphMode === "arcs" ? (
-                <ArcView
-                  projectId={activeProjectId}
-                  scope={scope}
-                  onOpen={(id) => {
-                    setShowGraph(false);
-                    openItem(id);
-                  }}
-                />
-              ) : (
-                <GraphView
-                  projectId={activeProjectId}
-                  scope={scope}
-                  onOpen={(id) => {
-                    setShowGraph(false);
-                    openItem(id);
-                  }}
-                />
-              )}
+              <ArcView
+                projectId={activeProjectId}
+                onOpen={(id) => {
+                  setShowGraph(false);
+                  openItem(id);
+                }}
+              />
             </div>
           </div>
         </div>

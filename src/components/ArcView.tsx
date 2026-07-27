@@ -22,15 +22,16 @@ function hexToRgb(hex: string): [number, number, number] {
 
 export default function ArcView({
   projectId,
-  scope,
+  scope = "all",
   onOpen,
 }: {
   projectId: string;
-  scope: string;
+  scope?: string;
   onOpen: (id: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [gscope, setGscope] = useState(scope === "project" ? "all" : scope);
+  // Opens on the whole vault: cross-project sweeps are the point of this view.
+  const [gscope, setGscope] = useState(scope);
   const [crossOnly, setCrossOnly] = useState(false);
   const [showInferred, setShowInferred] = useState(true);
   const [hover, setHover] = useState<{ x: number; node: Node } | null>(null);

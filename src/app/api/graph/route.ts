@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { scopeProjectIds } from "@/lib/projects";
 import { searchScopeSchema, CONTENT_TYPES } from "@/lib/validation";
+import { buildCorpus, cosine } from "@/lib/related";
 
 // Distinct, dark-theme-friendly hues used to break ties when projects share a
 // stored color (imported projects all default to the same one), so the
@@ -36,6 +37,7 @@ export async function GET(req: Request) {
       title: true,
       type: true,
       projectId: true,
+      createdAt: true, // the arc view orders notes by project, then by age
       project: { select: { id: true, name: true, color: true } },
     },
   });
@@ -45,6 +47,31 @@ export async function GET(req: Request) {
     where: { fromItemId: { in: [...itemIds] }, toItemId: { not: null } },
     select: { fromItemId: true, toItemId: true },
   });
+
+  // ?inferred=1 adds content-similarity edges: the connections nobody drew.
+  // Deterministic TF-IDF, no model calls; capped so a large vault stays quick.
+  let inferred: Array<{ source: string; target: string }> = [];
+  if (url.searchParams.get("inferred") === "1" && items.length > 1) {
+    const bodies = await prisma.item.findMany({
+      where: { id: { in: [...itemIds] } },
+      select: { id: true, title: true, body: true, projectId: true },
+    });
+    const corpus = buildCorpus(
+      bodies.map((b) => ({ id: b.id, projectId: b.projectId, text: `${b.title}\n${b.title}\n${b.body.slice(0, 5000)}` })),
+    );
+    const explicit = new Set(links.map((l) => [l.fromItemId, l.toItemId].sort().join("|")));
+    const scored: Array<{ source: string; target: string; score: number }> = [];
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const a = bodies[i];
+        const b = bodies[j];
+        if (explicit.has([a.id, b.id].sort().join("|"))) continue;
+        const score = cosine(corpus.vectors.get(a.id)!, corpus.vectors.get(b.id)!);
+        if (score >= 0.14) scored.push({ source: a.id, target: b.id, score });
+      }
+    }
+    inferred = scored.sort((x, y) => y.score - x.score).slice(0, 2000).map(({ source, target }) => ({ source, target }));
+  }
 
   // Distinct projects represented in the node set, in a stable (name) order.
   const seen = new Map<string, { id: string; name: string; storedColor: string }>();
@@ -88,11 +115,13 @@ export async function GET(req: Request) {
       label: i.title,
       type: i.type,
       projectId: i.projectId,
+      createdAt: i.createdAt.toISOString(),
       color: colorByProject.get(i.projectId)!,
     })),
     edges: links
       .filter((l) => l.toItemId && itemIds.has(l.toItemId))
       .map((l) => ({ source: l.fromItemId, target: l.toItemId! })),
+    inferred,
     projects: ordered.map((p) => ({ id: p.id, name: p.name, color: colorByProject.get(p.id)! })),
   });
 }

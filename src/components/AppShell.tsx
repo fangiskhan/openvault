@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
 import SpreadsheetView, { type Sheet } from "./SpreadsheetView";
 import GraphView from "./GraphView";
+import ArcView from "./ArcView";
 import StatusView from "./StatusView";
 import AccountsAdmin from "./AccountsAdmin";
 import CodeView from "./CodeView";
@@ -93,6 +94,7 @@ export default function AppShell() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [showGraph, setShowGraph] = useState(false);
+  const [graphMode, setGraphMode] = useState<"force" | "arcs">("force");
   const [showConnect, setShowConnect] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status" | "code">("notes");
@@ -913,19 +915,39 @@ export default function AppShell() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <span>Graph</span>
+              <div className="scope" style={{ marginLeft: 14 }}>
+                <button className={graphMode === "force" ? "on" : ""} onClick={() => setGraphMode("force")}>
+                  Force
+                </button>
+                <button className={graphMode === "arcs" ? "on" : ""} onClick={() => setGraphMode("arcs")}>
+                  Arcs
+                </button>
+              </div>
+              <div className="spacer" />
               <button className="btn-ghost" onClick={() => setShowGraph(false)}>
                 ✕
               </button>
             </div>
             <div className="modal-body">
-              <GraphView
-                projectId={activeProjectId}
-                scope={scope}
-                onOpen={(id) => {
-                  setShowGraph(false);
-                  openItem(id);
-                }}
-              />
+              {graphMode === "arcs" ? (
+                <ArcView
+                  projectId={activeProjectId}
+                  scope={scope}
+                  onOpen={(id) => {
+                    setShowGraph(false);
+                    openItem(id);
+                  }}
+                />
+              ) : (
+                <GraphView
+                  projectId={activeProjectId}
+                  scope={scope}
+                  onOpen={(id) => {
+                    setShowGraph(false);
+                    openItem(id);
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>

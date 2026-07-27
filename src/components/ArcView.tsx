@@ -252,7 +252,7 @@ export default function ArcView({
             <span className="cdot" style={{ background: hover.node.color }} /> {hover.node.label}
           </div>
         )}
-        <div className="graph-legend">
+        <div className="graph-legend arc-legend">
           <div className="graph-legend-title">Projects (left to right)</div>
           {data?.projects.map((p) => (
             <div key={p.id} className="graph-legend-item">

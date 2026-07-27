@@ -903,6 +903,35 @@ textarea {
   box-shadow: 6px 6px 0 0 var(--ink);
   cursor: crosshair;
 }
+/* The dome's left flank climbs steeply, so a tall legend column would clip it.
+   A horizontal strip along the very top clears the arcs entirely: the widest
+   arc peaks well below this band. */
+/* Specificity note: .graph-legend is declared later in this file, so the
+   override needs both classes to win the flex-direction tie. */
+.graph-legend.arc-legend {
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  bottom: auto;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 7px 10px;
+}
+.graph-legend.arc-legend .graph-legend-title {
+  margin-bottom: 0;
+  margin-right: 4px;
+}
+.graph-legend.arc-legend .graph-legend-item {
+  font-size: 11px;
+}
+.graph-legend.arc-legend .truncate {
+  max-width: 130px;
+}
 .arc-tip {
   position: absolute;
   max-width: 420px;

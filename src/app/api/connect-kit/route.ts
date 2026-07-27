@@ -40,9 +40,24 @@ did we do about X" — search the vault first:**
 - \`get_code_map\` / \`read_code\` for the actual code in a project's mirror
 
 If the vault has no record, say so plainly rather than guessing, and only then
-ask me. When you learn something new and durable about a project during our
-conversation, write it back (\`append_update\`, or \`import_notes\` for bigger
-chunks) so the next session finds it.
+ask me.
+
+## Write back what the next session would otherwise have to rediscover
+
+Do this on your own, without being asked. Use \`import_notes\` for a batch of
+atomic notes, \`append_update\` for a one-line progress log.
+
+What earns a note: a decision **and its reasoning** (including what was
+rejected); a gotcha with its symptom, cause and fix; how a subsystem actually
+works once you have read it; measured numbers rather than adjectives; and
+anything I corrected you about — my correction is the durable fact, your first
+answer was not.
+
+How to write it: one idea per note; specific searchable titles ("Auth token
+hashing decision", never "Notes 3"); link related notes with
+\`[[Exact Note Title]]\`; bodies that stand alone; \`search\` first and update an
+existing note rather than adding a near-duplicate. Facts from source code beat
+facts from memory — when they disagree, read the code, fix the note, and say so.
 
 Not connected? \`claude mcp add openvault ${base}/api/mcp --transport http --scope user\`
 (add \`--header "Authorization: Bearer <ovk_ token>"\` when the server requires auth).
@@ -236,6 +251,37 @@ Not connected? \`claude mcp add openvault ${base}/api/mcp --transport http --sco
   back with a note in \`get_active_work\`. Address it and resubmit.
 - After approval: \`append_update\` (actor = your name, e.g. "claude-code") with
   a 1–3 sentence summary of what you did and what's next.
+
+## Write back what the next session would otherwise have to rediscover
+
+A vault is only worth what gets written into it. Whenever this conversation
+produces knowledge that outlives it, record it with \`import_notes\` (a batch of
+atomic notes) or \`append_update\` (a short log line). Do this without being
+asked — the user should never have to say "save that".
+
+What earns a note:
+
+- **A decision and its reasoning.** Not just what was chosen, but why, and what
+  was rejected. "Templated briefing, no server-side LLM, because every user
+  already brings a model" beats "briefing is templated".
+- **A gotcha you hit.** The symptom, the cause, the fix. These are the most
+  expensive things to rediscover.
+- **How a subsystem actually works**, once you have read it.
+- **Measured numbers**, never adjectives. "6,010 tokens vs 83,106" beats "much
+  cheaper".
+- **Anything the user corrected you about.** Their correction is the durable
+  fact; your first answer was not.
+
+How to write it:
+
+- One idea per note. Titles must be specific and searchable ("Auth token
+  hashing decision"), never generic ("Notes 3").
+- Link related notes with \`[[Exact Note Title]]\` so the graph connects.
+- Bodies stand alone: someone landing on this note has no other context.
+- Prefer updating an existing note over adding a near-duplicate — \`search\`
+  first.
+- Facts from source code beat facts from memory. When they disagree, read the
+  code, fix the note, and say so.
 `;
 
   return new Response(claude, {

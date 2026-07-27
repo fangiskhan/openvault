@@ -8,6 +8,7 @@ import { importProject } from "../import";
 import { approveAccount, setRole } from "../accounts";
 import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 import { reviewWorkIntent } from "../work";
+import { searchItems, snippet } from "../search";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
 
 // Text snippet used for similarity: title carries the most signal, body capped
@@ -112,7 +113,8 @@ export const tools: Tool[] = [
   },
   {
     name: "search",
-    description: "Full-text search items by title/body within a project, connected projects, or all.",
+    description:
+      "Ranked search over item titles and bodies. Ask in natural language — the query is tokenized and results are ranked by how many terms match (title hits weigh more). Wrap in \"double quotes\" for an exact phrase. Scope: this project, connected projects, or all.",
     inputSchema: {
       type: "object",
       properties: { query: { type: "string" }, projectId: { type: "string" }, scope: scopeProp },
@@ -125,16 +127,16 @@ export const tools: Tool[] = [
         scope?: string;
       };
       const ids = await scopeProjectIds(projectId, scope);
-      return prisma.item.findMany({
-        where: {
-          type: { in: [...CONTENT_TYPES] },
-          ...(ids ? { projectId: { in: ids } } : {}),
-          OR: [{ title: { contains: query } }, { body: { contains: query } }],
-        },
-        take: 20,
-        orderBy: { updatedAt: "desc" },
-        select: { id: true, title: true, type: true, status: true, projectId: true },
-      });
+      const hits = await searchItems(query, ids);
+      return hits.map((h) => ({
+        id: h.id,
+        title: h.title,
+        type: h.type,
+        status: h.status,
+        projectId: h.projectId,
+        project: h.project.name,
+        snippet: snippet(h.body, query),
+      }));
     },
   },
   {

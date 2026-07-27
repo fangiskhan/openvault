@@ -21,7 +21,7 @@ Working v1: projects, status, cited briefings, multi-user accounts with roles an
 
 - Projects with connections; rename, export and delete from the sidebar
 - Markdown notes with `[[wikilinks]]`, backlinks, and a graph view
-- Search scoped to one project, connected projects, or the whole vault
+- Ranked search scoped to one project, connected projects, or the whole vault. Ask in natural language: the query is tokenized and results rank by how many terms a note covers, so "why no server-side AI" finds the note that answers it. `"Quoted"` queries stay literal.
 - Excel and CSV upload, parsed into searchable tables
 - A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status
 - A one-screen briefing built from real items; each line links to its source

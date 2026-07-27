@@ -1,8 +1,10 @@
-import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { scopeProjectIds } from "@/lib/projects";
-import { searchScopeSchema, CONTENT_TYPES } from "@/lib/validation";
+import { searchScopeSchema } from "@/lib/validation";
+import { searchItems, snippet } from "@/lib/search";
 
+// Same ranked implementation the search MCP tool uses, so the browser and
+// agents never disagree about what the vault contains.
 export async function GET(req: Request) {
   const denied = await requireAuth();
   if (denied) return denied;
@@ -14,29 +16,10 @@ export async function GET(req: Request) {
   if (!q) return Response.json({ results: [] });
 
   const projectIds = await scopeProjectIds(projectId, scope);
-
-  // On SQLite, `contains` compiles to LIKE, which is case-insensitive for ASCII.
-  // On Postgres, add `mode: "insensitive"` for the same behaviour.
-  const items = await prisma.item.findMany({
-    where: {
-      type: { in: [...CONTENT_TYPES] },
-      ...(projectIds ? { projectId: { in: projectIds } } : {}),
-      OR: [{ title: { contains: q } }, { body: { contains: q } }],
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 30,
-    select: {
-      id: true,
-      title: true,
-      type: true,
-      body: true,
-      projectId: true,
-      project: { select: { name: true, color: true } },
-    },
-  });
+  const hits = await searchItems(q, projectIds, 30);
 
   return Response.json({
-    results: items.map((it) => ({
+    results: hits.map((it) => ({
       id: it.id,
       title: it.title,
       type: it.type,
@@ -46,11 +29,4 @@ export async function GET(req: Request) {
       snippet: snippet(it.body, q),
     })),
   });
-}
-
-function snippet(body: string, q: string): string {
-  const i = body.toLowerCase().indexOf(q.toLowerCase());
-  if (i < 0) return body.slice(0, 140).replace(/\n/g, " ");
-  const start = Math.max(0, i - 50);
-  return (start > 0 ? "…" : "") + body.slice(start, start + 140).replace(/\n/g, " ");
 }

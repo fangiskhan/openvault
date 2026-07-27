@@ -880,7 +880,7 @@ export const tools: Tool[] = [
   {
     name: "find_project_bridges",
     description:
-      "Which projects share concepts — before anyone connects them. Scores every project pair by cross-project note similarity and existing cross-links, with the top note pairs as evidence. The 'how does our work connect' question, answered from content.",
+      "CANDIDATE project pairs worth a human look, scored by cross-project note similarity with the top note pairs as evidence. Read the evidence before acting: this is lexical (TF-IDF), not semantic, so shared TOOLING reads the same as shared SUBJECT — two unrelated projects that both hit an 'httpx ConnectError' or both call OpenAI will score. A real bridge shows domain words (a character, a client, a product); a false one shows library and error names. Never connect projects on the score alone.",
     inputSchema: { type: "object", properties: { limit: { type: "number", default: 5 } } },
     handler: async (a) => {
       const { limit } = a as { limit?: number };

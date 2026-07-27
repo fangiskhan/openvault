@@ -27,7 +27,7 @@ Working v1: projects, status, cited briefings, multi-user accounts with roles an
 - A one-screen briefing built from real items; each line links to its source
 - 31 MCP tools (table below)
 - Bulk ingestion: your agent splits a transcript, doc, or export into atomic notes (the downloadable vault-ingest skill teaches it how) and calls `import_notes`; the server builds the Map-of-Content, cross-links, and graph
-- Inferred connections: the Related rail and `suggest_links` surface notes that share content but were never linked; `find_project_bridges` scores which projects share concepts; the graph groups notes into topic clusters. Each suggestion lists the terms behind it.
+- Inferred connections: the Related rail and `suggest_links` surface notes that share content but were never linked; `find_project_bridges` proposes candidate project pairs; the graph groups notes into topic clusters. Every suggestion ships with the terms behind it, because the matching is lexical rather than semantic — two unrelated projects that both hit the same library error will score, and the evidence is how you tell that apart from real overlap in seconds.
 - A code mirror and work board per project, with conflict warnings before two agents touch the same file
 - Accounts with owner, executive and member roles; tokens stored as SHA-256 hashes and shown once; per-account web login; an audit trail of approvals, role changes, logins and agent writes
 - A Code tab where owners and executives approve or reject in-review work

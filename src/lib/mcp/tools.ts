@@ -467,22 +467,40 @@ export const tools: Tool[] = [
           },
         },
         deletes: { type: "array", items: { type: "string" }, description: "paths removed from the repo" },
+        manifest: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "The COMPLETE path list of the commit being mirrored. Anything mirrored but absent from it is deleted, and the project is recorded as sitting at this ref. Send it once after the content batches — this is what makes the mirror equal one commit instead of the union of everything ever pushed.",
+        },
         force: { type: "boolean", description: "ignore baseHash conflicts and overwrite anyway (previous content still goes to history)" },
         actor: { type: "string", description: "who is syncing (ignored when authenticated)" },
       },
       required: ["projectId", "files"],
     },
     handler: async (a, ctx) => {
-      const { projectId, ref, files, deletes, force } = a as {
+      const { projectId, ref, files, deletes, force, manifest } = a as {
         projectId: string;
         ref?: string;
         files: Array<{ path: string; content: string; baseHash?: string }>;
         deletes?: string[];
         force?: boolean;
+        manifest?: string[];
       };
       const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
-      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, mirrorMode: true, mirrorWriter: true },
+      });
       if (!project) throw new Error("project not found (use list_projects)");
+      // A replica mirror is a derived copy of one commit, written only by CI.
+      // Refusing everyone else is the whole point: it makes mirror-only work —
+      // and silently losing it — impossible rather than merely recoverable.
+      if (project.mirrorMode === "replica" && actor !== project.mirrorWriter) {
+        throw new Error(
+          `this project's mirror is a read-only replica of git, synced by '${project.mirrorWriter ?? "CI"}' on push to the default branch. Nothing written here would survive the next sync, and it would not be in any commit. Open a PR instead; the mirror follows once it merges.`,
+        );
+      }
       if (!Array.isArray(files) || files.length > MAX_SYNC_FILES) {
         throw new Error(`files must be an array of at most ${MAX_SYNC_FILES}; sync in batches`);
       }
@@ -584,6 +602,41 @@ export const tools: Tool[] = [
         deleted += r.count;
       }
 
+      // A manifest is the complete path list of the commit being mirrored.
+      // Anything not in it is gone from the tree, so it goes from the mirror —
+      // this is what makes the mirror equal ONE commit rather than the union of
+      // every file anyone ever pushed. Sent once after the content batches.
+      let pruned = 0;
+      if (Array.isArray(manifest)) {
+        const keep = new Set(manifest.filter((m) => typeof m === "string").map(normalizeRepoPath));
+        const present = await prisma.codeFile.findMany({
+          where: { projectId, part: 0 },
+          select: { path: true },
+        });
+        const gone = present.map((p) => p.path).filter((p) => !keep.has(p));
+        if (gone.length) {
+          await prisma.codeFile.deleteMany({ where: { projectId, path: { in: gone } } });
+          pruned = gone.length; // files removed, counted apart from explicit deletes
+        }
+        // Stamp the ref on everything in the manifest, including files whose
+        // content was unchanged and therefore never resent. ref means "verified
+        // present at this commit", not "last written during it" — otherwise a
+        // mirror can hold exactly the right bytes and still look like it spans
+        // five commits, which is the confusing half of the soup problem.
+        if (ref && keep.size) {
+          await prisma.codeFile.updateMany({
+            where: { projectId, path: { in: [...keep] } },
+            data: { ref },
+          });
+        }
+        // A manifest means this was a whole-tree sync, so the project now sits
+        // at exactly this ref — which is what staleness checks compare against.
+        await prisma.project.update({
+          where: { id: projectId },
+          data: { mirrorRef: ref ?? null, mirrorSyncedAt: new Date() },
+        });
+      }
+
       await prisma.auditEvent.create({
         data: {
           action: "sync_code",
@@ -595,6 +648,7 @@ export const tools: Tool[] = [
       return {
         synced,
         deleted,
+        pruned,
         skipped,
         conflicts,
         overwrote,
@@ -617,12 +671,47 @@ export const tools: Tool[] = [
       const { projectId } = a as { projectId: string };
       // Only chunk 0 carries the file-level metadata, so a chunked file appears
       // once with its whole size rather than once per stored row.
-      const files = await prisma.codeFile.findMany({
-        where: { projectId, part: 0 },
-        orderBy: { path: "asc" },
-        select: { path: true, hash: true, size: true, parts: true, ref: true, syncedBy: true, updatedAt: true },
-      });
-      return { projectId, fileCount: files.length, files };
+      const [project, files] = await Promise.all([
+        prisma.project.findUnique({
+          where: { id: projectId },
+          select: { mirrorMode: true, mirrorWriter: true, mirrorRef: true, mirrorSyncedAt: true },
+        }),
+        prisma.codeFile.findMany({
+          where: { projectId, part: 0 },
+          orderBy: { path: "asc" },
+          select: { path: true, hash: true, size: true, parts: true, ref: true, syncedBy: true, updatedAt: true },
+        }),
+      ]);
+
+      // Silent staleness is worse than an error: an agent reads three-commit-old
+      // code, nothing looks wrong, and it reasons confidently from fiction. A
+      // mirror written per-file over time is not a snapshot — it can hold a
+      // combination of versions that never coexisted in the repo — so say so.
+      const byRef = new Map<string, number>();
+      for (const f of files) byRef.set(f.ref ?? "(none)", (byRef.get(f.ref ?? "(none)") ?? 0) + 1);
+      const refs = [...byRef.entries()]
+        .map(([ref, count]) => ({ ref, count }))
+        .sort((x, y) => y.count - x.count);
+      const consistent = refs.length <= 1;
+      const expected = project?.mirrorRef ?? null;
+      const stale = expected ? files.filter((f) => f.ref !== expected).length : 0;
+
+      return {
+        projectId,
+        fileCount: files.length,
+        mirrorMode: project?.mirrorMode ?? "workspace",
+        ...(project?.mirrorMode === "replica" ? { mirrorWriter: project.mirrorWriter } : {}),
+        mirrorRef: expected,
+        mirrorSyncedAt: project?.mirrorSyncedAt ?? null,
+        consistent,
+        refs,
+        ...(consistent
+          ? {}
+          : {
+              warning: `This mirror spans ${refs.length} refs, so it is NOT a snapshot of any single commit — files here may be versions that never coexisted in the repo, and you cannot assume the tree builds. Treat older-ref files as possibly stale and check git for anything you are about to reason from.${stale ? ` ${stale} file(s) differ from the project's recorded ref ${expected}.` : ""}`,
+            }),
+        files,
+      };
     },
   },
   {
@@ -678,6 +767,54 @@ export const tools: Tool[] = [
         ref: file.ref,
         syncedBy: file.syncedBy,
         updatedAt: file.updatedAt,
+      };
+    },
+  },
+  {
+    name: "set_mirror_mode",
+    description:
+      "Choose how a project's code mirror is written. 'replica' makes it a read-only copy of one git commit, written solely by the CI account you name — nothing can then live in the mirror that is not in git, which is what stops mirror-only work being lost. 'workspace' keeps it directly writable, which is correct only for projects with no git remote. Owner/executive only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        mode: { type: "string", enum: ["workspace", "replica"] },
+        writer: { type: "string", description: "account username allowed to sync in replica mode (the CI account)" },
+      },
+      required: ["projectId", "mode"],
+    },
+    handler: async (a, ctx) => {
+      const approver = requireApprover(ctx);
+      const { projectId, mode, writer } = a as { projectId: string; mode: string; writer?: string };
+      if (mode !== "workspace" && mode !== "replica") throw new Error("mode must be workspace or replica");
+      if (mode === "replica" && !writer) {
+        throw new Error("replica mode needs a writer: the account CI authenticates as, e.g. the one whose ovk_ token your GitHub Action holds");
+      }
+      if (writer) {
+        const acc = await prisma.account.findUnique({ where: { username: writer }, select: { username: true, status: true } });
+        if (!acc) throw new Error(`no account '${writer}' — create one for CI first, then approve it`);
+        if (acc.status !== "approved") throw new Error(`account '${writer}' is ${acc.status}; approve it before CI can sync`);
+      }
+      const updated = await prisma.project
+        .update({
+          where: { id: projectId },
+          data: { mirrorMode: mode, mirrorWriter: mode === "replica" ? writer! : null },
+          select: { name: true, mirrorMode: true, mirrorWriter: true },
+        })
+        .catch(() => null);
+      if (!updated) throw new Error("project not found");
+      await prisma.auditEvent.create({
+        data: { action: "set_mirror_mode", actor: approver.username, target: projectId, detail: `${mode}${writer ? ` (${writer})` : ""}` },
+      });
+      return {
+        project: updated.name,
+        mirrorMode: updated.mirrorMode,
+        mirrorWriter: updated.mirrorWriter,
+        by: approver.username,
+        note:
+          mode === "replica"
+            ? `Only '${writer}' may sync_code now. Install the GitHub Action from the connect kit so the mirror follows the default branch.`
+            : "The mirror is directly writable again. Prefer this only for projects with no git remote.",
       };
     },
   },
@@ -743,6 +880,12 @@ export const tools: Tool[] = [
     handler: async (a, ctx) => {
       const { projectId, versionId } = a as { projectId: string; versionId: string };
       const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const proj = await prisma.project.findUnique({ where: { id: projectId }, select: { mirrorMode: true } });
+      if (proj?.mirrorMode === "replica") {
+        // Restoring into a derived mirror would put back a version git does not
+        // have at HEAD, recreating the exact drift replica mode exists to end.
+        throw new Error("this mirror is a replica of git — git is its history. Use git revert/checkout, and the mirror follows on the next sync.");
+      }
       const version = await prisma.codeVersion.findUnique({ where: { id: versionId } });
       if (!version || version.projectId !== projectId) throw new Error("version not found on this project (use get_code_history)");
 

@@ -25,6 +25,16 @@ model Project {
   healthSetAt DateTime?
   ownerAccountId String? // account that owns/maintains this project (routing + find_mcp)
   mcpUrl         String? // this project's own MCP endpoint, if it exposes one
+  // How the code mirror is written.
+  //   "workspace" — anyone approved may sync_code. Correct for projects with no
+  //                 git remote, and the only mode that existed at first.
+  //   "replica"   — the mirror is a DERIVED copy of one commit, written solely
+  //                 by CI. Nothing can live here that is not in git, so
+  //                 mirror-only work (and losing it) stops being possible.
+  mirrorMode     String    @default("workspace")
+  mirrorWriter   String? // in replica mode, the only account allowed to sync
+  mirrorRef      String? // the commit the mirror was last fully synced to
+  mirrorSyncedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

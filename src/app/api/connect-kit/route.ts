@@ -185,6 +185,149 @@ YOUR job is the judgment: splitting raw content into good notes.
     });
   }
 
+  // The CI authority. A local post-commit hook only fires on the machine that
+  // made the commit, and only for that person's commits, which is how a mirror
+  // ends up as per-file last-write-wins soup spanning several refs — a tree
+  // that never existed in the repo. This runs once per push to the default
+  // branch and syncs the WHOLE tree plus deletions, so the mirror equals one
+  // commit. It replaces the post-commit hook; do not run both.
+  if (file === "gh-action") {
+    const yml = `# Keeps this project's OpenVault code mirror equal to the default branch.
+#
+# Setup:
+#   1. Create a CI account in OpenVault (Accounts -> Add a member, e.g. "ci"),
+#      approve it, and copy its one-time ovk_ token.
+#   2. Add that token as a repository secret named OPENVAULT_TOKEN.
+#   3. Have an owner run set_mirror_mode { projectId, mode: "replica",
+#      writer: "ci" } so nothing but this workflow can write the mirror.
+#   4. Commit this file to .github/workflows/openvault-sync.yml
+#
+# After that the mirror is a read-only replica of one commit. Agents read it
+# with get_code_map / read_code; code changes go through pull requests.
+name: Sync code mirror to OpenVault
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  # Never let two pushes interleave batches — that is how a mirror ends up
+  # holding half of one commit and half of another.
+  group: openvault-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Push tree to OpenVault
+        env:
+          OPENVAULT_URL: ${base}
+          OPENVAULT_PROJECT: ${project.id}
+          OPENVAULT_TOKEN: \${{ secrets.OPENVAULT_TOKEN }}
+        run: node .github/workflows/openvault-sync.mjs
+`;
+    return new Response(yml, {
+      headers: {
+        "content-type": "text/yaml; charset=utf-8",
+        "content-disposition": `attachment; filename="openvault-sync.yml"`,
+      },
+    });
+  }
+
+  if (file === "gh-action-script") {
+    const js = `// Syncs the checked-out tree to an OpenVault code mirror. Run by
+// .github/workflows/openvault-sync.yml on every push to the default branch.
+//
+// Whole-tree, not changed-files-only: a mirror built from per-commit deltas
+// drifts into a mix of refs that never existed together. Sending the full
+// manifest each time means the mirror is always exactly this commit, and files
+// deleted in the repo are deleted here too.
+import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+const VAULT = process.env.OPENVAULT_URL;
+const PROJECT = process.env.OPENVAULT_PROJECT;
+const TOKEN = process.env.OPENVAULT_TOKEN;
+if (!VAULT || !PROJECT || !TOKEN) {
+  console.error("Missing OPENVAULT_URL / OPENVAULT_PROJECT / OPENVAULT_TOKEN");
+  process.exit(1);
+}
+
+const MAX_CHARS = 4_000_000;
+const BATCH_FILES = 100;
+const BATCH_BYTES = 1_800_000;
+const TEXT = /\\.(ts|tsx|js|jsx|mjs|cjs|json|md|txt|css|scss|html|yml|yaml|toml|py|rb|go|rs|java|kt|swift|sh|sql|prisma|graphql)$/i;
+
+const call = async (name, args) => {
+  const res = await fetch(VAULT + "/api/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer " + TOKEN },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()).slice(0, 300));
+  const json = await res.json();
+  const text = json.result?.content?.[0]?.text ?? "{}";
+  if (json.result?.isError) throw new Error(text);
+  return JSON.parse(text);
+};
+
+const sh = (cmd) => execSync(cmd, { encoding: "utf8" }).trim();
+const ref = sh("git rev-parse --abbrev-ref HEAD") + " @ " + sh("git rev-parse --short HEAD");
+
+const paths = sh("git ls-files").split("\\n").map((p) => p.trim()).filter((p) => p && TEXT.test(p));
+const files = [];
+for (const p of paths) {
+  try {
+    const content = readFileSync(p, "utf8");
+    if (content.length <= MAX_CHARS && !content.includes("\\u0000")) files.push({ path: p, content });
+  } catch { /* unreadable — skip */ }
+}
+
+// Skip files the mirror already holds byte-identically.
+const sha256 = (s) => createHash("sha256").update(s).digest("hex");
+const map = await call("get_code_map", { projectId: PROJECT });
+const known = new Map((map.files ?? []).map((f) => [f.path, f.hash]));
+const changed = files.filter((f) => known.get(f.path) !== sha256(f.content));
+
+const batches = [];
+let cur = [];
+let bytes = 0;
+for (const f of changed) {
+  const cost = f.content.length + f.path.length + 32;
+  if (cur.length && (cur.length >= BATCH_FILES || bytes + cost > BATCH_BYTES)) { batches.push(cur); cur = []; bytes = 0; }
+  cur.push(f);
+  bytes += cost;
+}
+if (cur.length) batches.push(cur);
+
+let synced = 0;
+for (let i = 0; i < batches.length; i++) {
+  const r = await call("sync_code", { projectId: PROJECT, ref, files: batches[i], actor: "ci" });
+  synced += r.synced ?? 0;
+  console.log("batch " + (i + 1) + "/" + batches.length + ": " + (r.synced ?? 0) + " file(s)");
+}
+
+// The manifest is the whole commit. Anything mirrored but missing from it was
+// deleted in this commit, so it is removed — and the project is recorded as
+// sitting at this ref, which is what staleness warnings compare against.
+const done = await call("sync_code", { projectId: PROJECT, ref, files: [], manifest: files.map((f) => f.path), actor: "ci" });
+console.log("mirror now at " + ref + ": " + files.length + " file(s), " + synced + " updated, " + (done.pruned ?? 0) + " removed");
+`;
+    return new Response(js, {
+      headers: {
+        "content-type": "text/javascript; charset=utf-8",
+        "content-disposition": `attachment; filename="openvault-sync.mjs"`,
+      },
+    });
+  }
+
   if (file === "commit-hook") {
     const hook = `#!/usr/bin/env node
 // OpenVault post-commit hook — auto-syncs each commit's changed files into the

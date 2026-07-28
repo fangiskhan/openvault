@@ -86,7 +86,21 @@ Each write carries the account or declared actor and lands in the audit log. Pat
 
 **Concurrent writes don't silently win.** The mirror holds one version per path, so two agents editing the same file could once overwrite each other without a word. Pass `baseHash` — the hash `read_code` gave you before editing — and a push that would land on top of someone else's newer version is **refused and reported** instead, naming who changed it and what to merge. Every superseded version is kept regardless: `get_code_history` shows them with previews, `restore_code` puts one back, and restoring is itself undoable. `npm run db:backup` includes the mirror.
 
-The mirror is not a version control system and shouldn't become one — git is where branching and merging belong. What it guarantees is narrower and worth stating plainly: **nothing you put in it disappears without a trace.**
+The mirror is not a version control system and shouldn't become one — git is where branching and merging belong.
+
+### Point the mirror at git (recommended for any repo with a remote)
+
+A mirror written per-file, by whoever happened to commit, drifts into something worse than stale: a mix of versions that **never coexisted in the repo**. This project's own mirror reached 104 files across 4 commits before anything noticed. An agent reading two files there is reading a tree you could not build.
+
+Set `mirrorMode: "replica"` (via the `set_mirror_mode` tool) and install the GitHub Action from the **Connect agent** modal. Then:
+
+- CI syncs the **whole tree plus deletions** on every push to the default branch, so the mirror always equals exactly one commit
+- Only the CI account may write it — everyone else is refused with a pointer to open a PR, so **mirror-only work cannot exist**, which retires the whole class of losing it
+- `get_code_map` reports `consistent`, the ref breakdown, and warns loudly if the mirror ever spans several commits again
+
+`"workspace"` mode keeps the mirror directly writable and remains correct for projects with **no git remote** — those would otherwise lose their mirror entirely.
+
+The guarantee in workspace mode stays narrower but firm: **nothing you put in it disappears without a trace.**
 
 To mirror an existing repo in one shot, run `npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl]`. It uses `git ls-files` where it can, walks the tree with sane excludes where it can't, and refuses to upload `.env` files. Pair it with the post-commit hook and the mirror stays current from then on.
 

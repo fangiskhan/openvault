@@ -6,7 +6,7 @@ import { buildTemplatedBriefing } from "../briefing/templated";
 import { ITEM_STATUSES, CONTENT_TYPES, importSchema } from "../validation";
 import { importProject } from "../import";
 import { approveAccount, setRole } from "../accounts";
-import { MAX_SYNC_FILES, MAX_TOTAL_FILE_CHARS, chunkContent, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
+import { MAX_SYNC_FILES, MAX_TOTAL_FILE_CHARS, READ_WINDOW, READ_WINDOW_MAX, chunkContent, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 import { reviewWorkIntent } from "../work";
 import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
@@ -547,25 +547,53 @@ export const tools: Tool[] = [
   },
   {
     name: "read_code",
-    description: "Read one file from the project's shared code mirror (synced by agents via sync_code).",
+    description:
+      "Read one file from the project's shared code mirror (synced by agents via sync_code). Big files are returned in windows rather than whole — a 1 MB module is ~300k tokens and would swamp your context. When the response says truncated, call again with the offset it gives you, or pass offset/maxChars to read just the region you care about.",
     inputSchema: {
       type: "object",
-      properties: { projectId: { type: "string" }, path: { type: "string" } },
+      properties: {
+        projectId: { type: "string" },
+        path: { type: "string" },
+        offset: { type: "number", description: "character offset to start from (default 0)" },
+        maxChars: { type: "number", description: `characters to return (default ${READ_WINDOW}, max ${READ_WINDOW_MAX})` },
+      },
       required: ["projectId", "path"],
     },
     handler: async (a) => {
-      const { projectId, path } = a as { projectId: string; path: string };
+      const { projectId, path, offset, maxChars } = a as {
+        projectId: string;
+        path: string;
+        offset?: number;
+        maxChars?: number;
+      };
       const rows = await prisma.codeFile.findMany({
         where: { projectId, path: normalizeRepoPath(path) },
         orderBy: { part: "asc" },
       });
       if (!rows.length) throw new Error("file not in the mirror (see get_code_map; an agent may need to sync_code it)");
       const file = rows[0];
+      const full = rows.map((r) => r.content).join(""); // rejoined from its chunks
+
+      const start = Math.max(0, Math.floor(Number(offset) || 0));
+      const window = Math.min(Math.max(1, Math.floor(Number(maxChars) || READ_WINDOW)), READ_WINDOW_MAX);
+      const content = full.slice(start, start + window);
+      const end = start + content.length;
+      const truncated = end < full.length;
+
       return {
         path: file.path,
-        content: rows.map((r) => r.content).join(""), // rejoined from its chunks
+        content,
+        size: full.length,
+        offset: start,
+        returned: content.length,
+        truncated,
+        ...(truncated
+          ? {
+              nextOffset: end,
+              hint: `Showing ${start}-${end} of ${full.length} chars. Call read_code again with offset ${end} for the next window.`,
+            }
+          : {}),
         hash: file.hash,
-        size: file.size,
         parts: rows.length,
         ref: file.ref,
         syncedBy: file.syncedBy,

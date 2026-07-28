@@ -15,6 +15,13 @@ export const MAX_FILE_CHARS = 200_000;
 // vault. Well above any hand-written module.
 export const MAX_TOTAL_FILE_CHARS = 4_000_000;
 
+// How much of a file read_code hands back at once. Storing a 1.25 MB module is
+// now fine; returning it whole is not — that is ~300k tokens and would swamp
+// the caller's context. So reads are windowed and the response says how to get
+// the next slice.
+export const READ_WINDOW = 60_000;
+export const READ_WINDOW_MAX = 200_000;
+
 // Split a file into storable chunks. Ordinary files yield exactly one.
 export function chunkContent(content: string, size = MAX_FILE_CHARS): string[] {
   if (content.length <= size) return [content];

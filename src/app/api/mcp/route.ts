@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { tools, toolMap, type ToolCtx } from "@/lib/mcp/tools";
-import { secretsRequired } from "@/lib/security";
+import { secretsRequired, isDemoMode } from "@/lib/security";
 import { resolveByToken, getOrCreateOwner } from "@/lib/accounts";
 import { rateLimit, clientKey } from "@/lib/ratelimit";
 
@@ -25,9 +25,24 @@ const PROTOCOL_VERSION = "2025-06-18";
 // write to the real person, or a `reject` Response. An empty MCP_TOKEN is only
 // allowed when running open (dev / OPENVAULT_PUBLIC=1); assertSecureBoot stops a
 // production server with no token, this is the request-time backstop.
+// Tools that only read. In demo mode everything else is refused, so a visitor
+// can point a real agent at the demo and explore the vault, but cannot alter
+// it. An allowlist rather than a blocklist: a new tool is denied until someone
+// deliberately declares it safe.
+const DEMO_READ_TOOLS = new Set([
+  "whoami", "list_projects", "get_status", "get_attention", "get_briefing",
+  "get_recent_activity", "search", "read_item", "get_inbox",
+  "get_graph", "get_links", "find_path", "suggest_links", "find_project_bridges",
+  "get_active_work", "get_code_map", "read_code",
+  "list_skills", "get_skill", "find_mcp",
+]);
+
 async function resolveCaller(req: Request): Promise<ToolCtx | { reject: Response }> {
   const bearer = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const shared = process.env.MCP_TOKEN;
+
+  // Demo mode: connect without credentials, read-only (enforced per tool below).
+  if (isDemoMode() && !bearer) return { account: null };
 
   if (shared && bearer && safeEqual(bearer, shared)) {
     const owner = await getOrCreateOwner();
@@ -106,6 +121,17 @@ export async function POST(req: Request) {
     case "tools/call": {
       const tool = params?.name ? toolMap.get(params.name) : undefined;
       if (!tool) return error(id, -32602, `unknown tool: ${params?.name}`);
+      if (isDemoMode() && !DEMO_READ_TOOLS.has(tool.name)) {
+        return result(id, {
+          content: [
+            {
+              type: "text",
+              text: `Error: '${tool.name}' writes, and this is a public read-only demo of OpenVault. Read tools all work — try get_briefing, search, get_graph or get_code_map. Self-host for a writable vault: https://github.com/fangiskhan/openvault`,
+            },
+          ],
+          isError: true,
+        });
+      }
       // Enforce each tool's declared required arguments. Without this, a
       // malformed call (e.g. `q` instead of `query`) reaches the handler as
       // undefined and can return a plausible empty result — the agent then

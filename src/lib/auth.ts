@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import crypto from "node:crypto";
-import { secretsRequired } from "./security";
+import { secretsRequired, isDemoMode } from "./security";
 
 export const SESSION_COOKIE = "ov_session";
 
@@ -57,6 +57,10 @@ export function checkPassword(pw: string): boolean {
 }
 
 export async function isAuthed(): Promise<boolean> {
+  // Read-only demo: let visitors browse without a password. Safe because every
+  // mutating request is refused before it reaches a handler (src/proxy.ts), so
+  // this grants visibility and no authority.
+  if (isDemoMode()) return true;
   if (!authEnabled()) {
     // No password gate configured. Open is only acceptable when running open is
     // permitted (local dev, or an explicit OPENVAULT_PUBLIC=1); a locked-down

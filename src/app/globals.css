@@ -805,6 +805,17 @@ textarea {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.demo-chip {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 2px;
+  background: var(--lime);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  padding: 5px 9px;
+  white-space: nowrap;
+}
 .id-chip {
   font-family: var(--mono);
   font-size: 12px;

@@ -583,6 +583,11 @@ export default function AppShell() {
           )}
         </div>
         <div className="spacer" />
+        {me?.kind === "demo" && (
+          <span className="demo-chip" title="Public read-only demo — every write is refused server-side">
+            READ-ONLY DEMO
+          </span>
+        )}
         {me?.username && me.kind !== "open" && (
           <button
             className="id-chip"

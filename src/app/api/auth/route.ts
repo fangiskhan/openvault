@@ -3,6 +3,7 @@ import { checkPassword, makeSessionToken, authEnabled, sessionIdentity, isAuthed
 import { resolveByToken } from "@/lib/accounts";
 import { prisma } from "@/lib/db";
 import { rateLimit, clientKey, tooMany } from "@/lib/ratelimit";
+import { isDemoMode } from "@/lib/security";
 
 const COOKIE_OPTS = {
   httpOnly: true,
@@ -59,6 +60,8 @@ export async function GET() {
     return Response.json({ kind: "none" }, { status: 401 });
   }
   if (session?.kind === "password") return Response.json({ kind: "owner", username: "owner", role: "owner" });
+  // Read-only demo: identify as such so the UI can say so and hide write affordances.
+  if (isDemoMode()) return Response.json({ kind: "demo", username: null, role: "reader" });
   // No cookie: open local/dev mode still counts as the owner at the keyboard.
   if (await isAuthed()) return Response.json({ kind: "open", username: "owner", role: "owner" });
   return Response.json({ kind: "none" }, { status: 401 });

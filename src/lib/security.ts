@@ -26,6 +26,14 @@ export function isPublicOptIn(): boolean {
   return process.env.OPENVAULT_PUBLIC === "1";
 }
 
+// Public read-only demo: anyone may read, nobody may write. Writes are denied
+// by default in src/proxy.ts (and by tool name in the MCP route), so this flag
+// only has to open the READ path — which is why it counts as an auth bypass
+// for GETs but grants no authority whatsoever.
+export function isDemoMode(): boolean {
+  return process.env.OPENVAULT_DEMO === "1";
+}
+
 // True when empty/weak auth secrets are a hard error rather than a local-dev
 // convenience: a production build that didn't opt into being public.
 export function secretsRequired(): boolean {

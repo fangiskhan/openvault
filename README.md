@@ -192,6 +192,7 @@ Keep SQLite or point `DATABASE_URL` at Postgres. Production refuses to start unt
 | `MCP_TOKEN` | Shared bearer token for `/api/mcp`; resolves to the owner. Per-account `ovk_` tokens beat it for teams. Required in production unless `OPENVAULT_PUBLIC=1`. |
 | `OWNER_USERNAME` | Username of the root owner account (default `owner`). Reserved. |
 | `OPENVAULT_PUBLIC` | Set to `1` to run with open gates in production on purpose. |
+| `OPENVAULT_DEMO` | Set to `1` for a public read-only demo: anyone may read, every write is refused. Use a vault holding demo data — readers see every note. |
 | `STORAGE_DRIVER` | `local` (uploads go to `./storage`) or `vercel` (Vercel Blob) |
 | `BLOB_READ_WRITE_TOKEN` | Required when `STORAGE_DRIVER=vercel` |
 

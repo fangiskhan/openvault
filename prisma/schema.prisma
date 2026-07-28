@@ -31,6 +31,7 @@ model Project {
   items         Item[]
   files         FileAsset[]
   codeFiles     CodeFile[]
+  codeVersions  CodeVersion[]
   workIntents   WorkIntent[]
   skills        ProjectSkill[]
   relationsFrom ProjectRelation[] @relation("fromProject")
@@ -85,6 +86,26 @@ model ProjectSkill {
 
   @@unique([projectId, name])
   @@index([projectId])
+}
+
+// Every version a mirrored file has ever been replaced by. The mirror itself is
+// one slot per path, which silently destroyed work that existed ONLY in the
+// mirror when an unrelated commit pushed a different version of the same path.
+// A single slot is fine; a single slot with no undo is not.
+model CodeVersion {
+  id        String   @id @default(cuid())
+  projectId String
+  path      String
+  content   String // the full previous content, kept whole (versions are not chunked)
+  hash      String
+  size      Int
+  ref       String? // the ref this superseded version carried
+  syncedBy  String?
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, path, createdAt])
 }
 
 // An agent's declared unit of work: "I am changing these files to do X".

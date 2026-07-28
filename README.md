@@ -82,7 +82,11 @@ With the vault:
 4. An owner or executive reads the synced files and calls `review_work`. Approval marks the work done and clears the actor to push to git. Request-changes sends it back with a note. A member cannot mark their own work done; the server rejects the attempt.
 5. Any agent reads current code through `get_code_map` and `read_code` without a git pull.
 
-Each write carries the account or declared actor and lands in the audit log. Paths are validated against traversal; files cap at 200k characters, 100 per sync. The vault holds the merge decision and its provenance. Git performs the merge, and the server never holds your GitHub credentials.
+Each write carries the account or declared actor and lands in the audit log. Paths are validated against traversal; files larger than 200k characters are chunked and rejoined on read, 100 files per sync. The vault holds the merge decision and its provenance. Git performs the merge, and the server never holds your GitHub credentials.
+
+**Concurrent writes don't silently win.** The mirror holds one version per path, so two agents editing the same file could once overwrite each other without a word. Pass `baseHash` — the hash `read_code` gave you before editing — and a push that would land on top of someone else's newer version is **refused and reported** instead, naming who changed it and what to merge. Every superseded version is kept regardless: `get_code_history` shows them with previews, `restore_code` puts one back, and restoring is itself undoable. `npm run db:backup` includes the mirror.
+
+The mirror is not a version control system and shouldn't become one — git is where branching and merging belong. What it guarantees is narrower and worth stating plainly: **nothing you put in it disappears without a trace.**
 
 To mirror an existing repo in one shot, run `npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl]`. It uses `git ls-files` where it can, walks the tree with sane excludes where it can't, and refuses to upload `.env` files. Pair it with the post-commit hook and the mirror stays current from then on.
 

@@ -6,7 +6,7 @@ import { buildTemplatedBriefing } from "../briefing/templated";
 import { ITEM_STATUSES, CONTENT_TYPES, importSchema } from "../validation";
 import { importProject } from "../import";
 import { approveAccount, setRole } from "../accounts";
-import { MAX_SYNC_FILES, MAX_TOTAL_FILE_CHARS, READ_WINDOW, READ_WINDOW_MAX, chunkContent, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
+import { MAX_SYNC_FILES, MAX_TOTAL_FILE_CHARS, READ_WINDOW, READ_WINDOW_MAX, MAX_CODE_VERSIONS, chunkContent, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 import { reviewWorkIntent } from "../work";
 import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
@@ -444,7 +444,7 @@ export const tools: Tool[] = [
   {
     name: "sync_code",
     description:
-      "Push file snapshots into the project's shared code mirror so other agents can browse them (get_code_map / read_code) without pulling git. Send only CHANGED files — diff your local files against get_code_map hashes first. Max 100 files per call; larger files are chunked and rejoined automatically. DO NOT use this to seed a whole repo: contents travel as tool arguments, so a few hundred files would cost you roughly a million output tokens. For a first sync or any bulk update, run the repo's script instead, which reads the files from disk and batches them over HTTP: npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl].",
+      "Push file snapshots into the project's shared code mirror so other agents can browse them (get_code_map / read_code) without pulling git. Send only CHANGED files — diff your local files against get_code_map hashes first. ALWAYS pass baseHash (the hash read_code returned before you edited): the mirror holds ONE version per path, so without it your push silently replaces whatever a teammate wrote in between. With it, a clashing push is refused and reported so you can merge. Superseded content is always recoverable via get_code_history. Max 100 files per call; larger files are chunked and rejoined automatically. DO NOT use this to seed a whole repo: contents travel as tool arguments, so a few hundred files would cost you roughly a million output tokens. For a first sync or any bulk update, run the repo's script instead, which reads the files from disk and batches them over HTTP: npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl].",
     inputSchema: {
       type: "object",
       properties: {
@@ -454,21 +454,31 @@ export const tools: Tool[] = [
           type: "array",
           items: {
             type: "object",
-            properties: { path: { type: "string" }, content: { type: "string" } },
+            properties: {
+              path: { type: "string" },
+              content: { type: "string" },
+              baseHash: {
+                type: "string",
+                description:
+                  "The hash read_code gave you before you edited. Send it: if someone else wrote this path meanwhile, the push is refused instead of erasing their work.",
+              },
+            },
             required: ["path", "content"],
           },
         },
         deletes: { type: "array", items: { type: "string" }, description: "paths removed from the repo" },
+        force: { type: "boolean", description: "ignore baseHash conflicts and overwrite anyway (previous content still goes to history)" },
         actor: { type: "string", description: "who is syncing (ignored when authenticated)" },
       },
       required: ["projectId", "files"],
     },
     handler: async (a, ctx) => {
-      const { projectId, ref, files, deletes } = a as {
+      const { projectId, ref, files, deletes, force } = a as {
         projectId: string;
         ref?: string;
-        files: Array<{ path: string; content: string }>;
+        files: Array<{ path: string; content: string; baseHash?: string }>;
         deletes?: string[];
+        force?: boolean;
       };
       const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
       const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
@@ -478,6 +488,8 @@ export const tools: Tool[] = [
       }
 
       const skipped: Array<{ path: string; reason: string }> = [];
+      const conflicts: Array<{ path: string; yourBase: string; currentHash: string; currentRef: string | null; currentSyncedBy: string | null; hint: string }> = [];
+      const overwrote: Array<{ path: string; previousHash: string; previousRef: string | null; previousBy: string | null }> = [];
       let synced = 0;
       for (const f of files) {
         if (!f || typeof f.path !== "string" || typeof f.content !== "string") {
@@ -493,11 +505,61 @@ export const tools: Tool[] = [
           continue;
         }
         const path = normalizeRepoPath(f.path);
+        const incomingHash = hashContent(f.content);
+
+        // What is in the slot right now. The mirror is one slot per path, so a
+        // write here replaces whatever another agent last put there.
+        const existingRows = await prisma.codeFile.findMany({
+          where: { projectId, path },
+          orderBy: { part: "asc" },
+        });
+        const existing = existingRows[0];
+
+        if (existing && existing.hash !== incomingHash) {
+          // Compare-and-swap: an agent that read the file before editing sends
+          // the hash it started from. If the slot moved since, someone else
+          // wrote in between and this push would silently erase their work —
+          // exactly the failure that destroyed unpushed mirror-authored code.
+          if (!force && f.baseHash && f.baseHash !== existing.hash) {
+            conflicts.push({
+              path,
+              yourBase: f.baseHash,
+              currentHash: existing.hash,
+              currentRef: existing.ref,
+              currentSyncedBy: existing.syncedBy,
+              hint: `${existing.syncedBy ?? "someone"} changed this since you read it. read_code it again, merge their changes into yours, then sync with baseHash ${existing.hash}. Pass force: true only if you mean to discard their version (the old one is kept in get_code_history either way).`,
+            });
+            continue;
+          }
+          // Whatever happens, the superseded content is recoverable.
+          await prisma.codeVersion.create({
+            data: {
+              projectId,
+              path,
+              content: existingRows.map((r) => r.content).join(""),
+              hash: existing.hash,
+              size: existing.size,
+              ref: existing.ref,
+              syncedBy: existing.syncedBy,
+            },
+          });
+          const stale = await prisma.codeVersion.findMany({
+            where: { projectId, path },
+            orderBy: { createdAt: "desc" },
+            skip: MAX_CODE_VERSIONS,
+            select: { id: true },
+          });
+          if (stale.length) {
+            await prisma.codeVersion.deleteMany({ where: { id: { in: stale.map((s) => s.id) } } });
+          }
+          overwrote.push({ path, previousHash: existing.hash, previousRef: existing.ref, previousBy: existing.syncedBy });
+        }
+
         // Big files are stored across several rows and rejoined on read, so a
         // project's largest modules stay in the mirror instead of vanishing.
         const chunks = chunkContent(f.content);
         const shared = {
-          hash: hashContent(f.content),
+          hash: incomingHash,
           size: f.content.length,
           parts: chunks.length,
           ref: ref ?? null,
@@ -523,9 +585,27 @@ export const tools: Tool[] = [
       }
 
       await prisma.auditEvent.create({
-        data: { action: "sync_code", actor, target: projectId, detail: `${synced} synced, ${deleted} deleted${ref ? ` @ ${ref}` : ""}` },
+        data: {
+          action: "sync_code",
+          actor,
+          target: projectId,
+          detail: `${synced} synced, ${deleted} deleted, ${conflicts.length} conflicted${ref ? ` @ ${ref}` : ""}`,
+        },
       });
-      return { synced, deleted, skipped, by: actor };
+      return {
+        synced,
+        deleted,
+        skipped,
+        conflicts,
+        overwrote,
+        by: actor,
+        ...(conflicts.length
+          ? { warning: `${conflicts.length} file(s) were NOT written because someone changed them after you read them. Merge and retry — nothing was lost.` }
+          : {}),
+        ...(overwrote.length && !conflicts.length
+          ? { note: `Replaced ${overwrote.length} file(s); the previous content is in get_code_history if it is needed back.` }
+          : {}),
+      };
     },
   },
   {
@@ -599,6 +679,111 @@ export const tools: Tool[] = [
         syncedBy: file.syncedBy,
         updatedAt: file.updatedAt,
       };
+    },
+  },
+  {
+    name: "get_code_history",
+    description:
+      "Previous versions of a mirrored file, newest first — every version that was replaced by a later sync. Use it when a push overwrote something that should not have been lost, or to see who has been writing this path. restore_code puts one back.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        path: { type: "string" },
+        preview: { type: "number", description: "characters of each version to preview (default 400, 0 for none)" },
+      },
+      required: ["projectId", "path"],
+    },
+    handler: async (a) => {
+      const { projectId, path, preview } = a as { projectId: string; path: string; preview?: number };
+      const p = normalizeRepoPath(path);
+      const chars = preview === undefined ? 400 : Math.max(0, Math.min(Number(preview) || 0, 4000));
+      const [current, versions] = await Promise.all([
+        prisma.codeFile.findFirst({ where: { projectId, path: p }, orderBy: { part: "asc" } }),
+        prisma.codeVersion.findMany({
+          where: { projectId, path: p },
+          orderBy: { createdAt: "desc" },
+          take: MAX_CODE_VERSIONS,
+        }),
+      ]);
+      return {
+        path: p,
+        current: current
+          ? { hash: current.hash, size: current.size, ref: current.ref, syncedBy: current.syncedBy, updatedAt: current.updatedAt }
+          : null,
+        versionCount: versions.length,
+        versions: versions.map((v) => ({
+          versionId: v.id,
+          hash: v.hash,
+          size: v.size,
+          ref: v.ref,
+          syncedBy: v.syncedBy,
+          replacedAt: v.createdAt,
+          ...(chars ? { preview: v.content.slice(0, chars) } : {}),
+        })),
+        hint: versions.length
+          ? "restore_code with a versionId puts that content back as the current version (the version it replaces is itself kept)."
+          : "No superseded versions — this path has only ever been written once.",
+      };
+    },
+  },
+  {
+    name: "restore_code",
+    description:
+      "Put a previous version of a mirrored file back as the current one. The version being replaced is itself saved to history first, so restoring is never destructive and can be undone.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        versionId: { type: "string", description: "from get_code_history" },
+        actor: { type: "string", description: "who is restoring (ignored when authenticated)" },
+      },
+      required: ["projectId", "versionId"],
+    },
+    handler: async (a, ctx) => {
+      const { projectId, versionId } = a as { projectId: string; versionId: string };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const version = await prisma.codeVersion.findUnique({ where: { id: versionId } });
+      if (!version || version.projectId !== projectId) throw new Error("version not found on this project (use get_code_history)");
+
+      const path = version.path;
+      const existingRows = await prisma.codeFile.findMany({ where: { projectId, path }, orderBy: { part: "asc" } });
+      const existing = existingRows[0];
+      // Keep what we are about to replace, so a restore can itself be undone.
+      if (existing && existing.hash !== version.hash) {
+        await prisma.codeVersion.create({
+          data: {
+            projectId,
+            path,
+            content: existingRows.map((r) => r.content).join(""),
+            hash: existing.hash,
+            size: existing.size,
+            ref: existing.ref,
+            syncedBy: existing.syncedBy,
+          },
+        });
+      }
+
+      const chunks = chunkContent(version.content);
+      const shared = {
+        hash: version.hash,
+        size: version.size,
+        parts: chunks.length,
+        ref: version.ref ? `${version.ref} (restored)` : "restored",
+        syncedBy: actor,
+      };
+      for (let part = 0; part < chunks.length; part++) {
+        await prisma.codeFile.upsert({
+          where: { projectId_path_part: { projectId, path, part } },
+          create: { projectId, path, part, content: chunks[part], ...shared },
+          update: { content: chunks[part], ...shared },
+        });
+      }
+      await prisma.codeFile.deleteMany({ where: { projectId, path, part: { gte: chunks.length } } });
+      await prisma.auditEvent.create({
+        data: { action: "restore_code", actor, target: projectId, detail: `${path} -> ${version.hash.slice(0, 12)}` },
+      });
+      return { path, restoredHash: version.hash, size: version.size, by: actor, replacedHash: existing?.hash ?? null };
     },
   },
   {

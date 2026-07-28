@@ -22,6 +22,11 @@ export const MAX_TOTAL_FILE_CHARS = 4_000_000;
 export const READ_WINDOW = 60_000;
 export const READ_WINDOW_MAX = 200_000;
 
+// How many superseded versions of a path to keep. Deep enough that a bad
+// overwrite noticed a day later is still recoverable, shallow enough that the
+// mirror does not become an unbounded VCS — which is git's job, not this.
+export const MAX_CODE_VERSIONS = 10;
+
 // Split a file into storable chunks. Ordinary files yield exactly one.
 export function chunkContent(content: string, size = MAX_FILE_CHARS): string[] {
   if (content.length <= size) return [content];

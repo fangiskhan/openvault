@@ -221,17 +221,42 @@ async function main() {
 
   const headers = { "content-type": "application/json" };
   if (process.env.OPENVAULT_TOKEN) headers.authorization = "Bearer " + process.env.OPENVAULT_TOKEN;
-  const res = await fetch(VAULT + "/api/mcp", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      jsonrpc: "2.0", id: 1, method: "tools/call",
-      params: { name: "sync_code", arguments: { projectId: PROJECT_ID, ref, files: files.slice(0, 100), deletes, actor: "post-commit-hook" } },
-    }),
+  const call = async (name, args) => {
+    const res = await fetch(VAULT + "/api/mcp", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const json = await res.json();
+    return JSON.parse(json.result?.content?.[0]?.text ?? "{}");
+  };
+
+  // Tell the server what we believe each file currently is. Without this the
+  // hook pushes blind and can replace work that exists ONLY in the mirror —
+  // which has happened, silently, and cost a day's work. With it, a clashing
+  // file is refused and reported instead of overwritten.
+  let baseHashes = new Map();
+  try {
+    const map = await call("get_code_map", { projectId: PROJECT_ID });
+    baseHashes = new Map((map.files ?? []).map((f) => [f.path, f.hash]));
+  } catch { /* first sync, or vault unreachable — fall through */ }
+  for (const f of files) {
+    const known = baseHashes.get(f.path);
+    if (known) f.baseHash = known;
+  }
+
+  const r = await call("sync_code", {
+    projectId: PROJECT_ID, ref, files: files.slice(0, 100), deletes, actor: "post-commit-hook",
   });
-  console.log(res.ok
-    ? "openvault: mirror synced (" + files.length + " file(s), " + deletes.length + " delete(s), " + ref + ")"
-    : "openvault: sync failed (HTTP " + res.status + ") — mirror may be stale");
+  console.log("openvault: mirror synced (" + (r.synced ?? 0) + " file(s), " + (r.deleted ?? 0) + " delete(s), " + ref + ")");
+  if (r.conflicts?.length) {
+    console.log("openvault: " + r.conflicts.length + " file(s) NOT synced — changed in the mirror since you last read them:");
+    for (const c of r.conflicts) {
+      console.log("  " + c.path + " (currently " + (c.currentSyncedBy || "unknown") + (c.currentRef ? ", ref " + c.currentRef : "") + ")");
+    }
+    console.log("  Your commit is safe in git. Nothing in the mirror was lost. Merge those paths and re-sync.");
+  }
 }
 
 main().catch((e) => console.log("openvault: sync skipped — " + e.message));

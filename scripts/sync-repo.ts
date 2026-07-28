@@ -1,6 +1,10 @@
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
+
+// Same content hash the server stores, so "unchanged" can be decided locally.
+const hashOf = (content: string) => createHash("sha256").update(content).digest("hex");
 
 // Sync any repo's source into a vault project's code mirror, so agents answer
 // "how does X work" by reading the code THROUGH the vault — no filesystem
@@ -58,6 +62,8 @@ function walk(root: string, rel = ""): string[] {
   return out;
 }
 
+type OutFile = { path: string; content: string; baseHash?: string };
+
 async function main() {
   if (!dir || !projectName) {
     console.error("usage: npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl]");
@@ -99,7 +105,7 @@ async function main() {
     paths = paths.slice(0, MAX_FILES);
   }
 
-  const files: Array<{ path: string; content: string }> = [];
+  const files: OutFile[] = [];
   for (const p of paths) {
     try {
       const content = readFileSync(path.join(dir, p), "utf8");
@@ -109,9 +115,87 @@ async function main() {
     }
   }
 
+  // Only overwrite mirror content that ALREADY EXISTS IN GIT.
+  //
+  // Sending the mirror's current hash as baseHash would be theatre — it just
+  // says "replace whatever is there". The real question is whether what is
+  // there can be recovered if we replace it. If the mirror holds a version
+  // that git has never seen, it is mirror-only work (someone authoring without
+  // a checkout) and this push would destroy it, which is precisely how a day's
+  // CSS was lost. Git blob ids answer that exactly: hash the mirror's content
+  // the way git would and ask the repo whether it knows that blob.
+  const mapRes = (await rpc("get_code_map", { projectId: project.id })) as {
+    files?: Array<{ path: string; hash: string }>;
+  };
+  const mirrorHash = new Map((mapRes.files ?? []).map((f) => [f.path, f.hash]));
+
+  const gitBlobId = (content: string) => {
+    const buf = Buffer.from(content, "utf8");
+    return createHash("sha1").update(`blob ${buf.length}\0`).update(buf).digest("hex");
+  };
+  const knownBlob = (content: string) => {
+    try {
+      execSync(`git cat-file -e ${gitBlobId(content)}`, { cwd: dir, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const inGitHistory = (content: string) => {
+    if (!isGit) return false;
+    // A Windows checkout holds CRLF on disk while git stores the blob with LF,
+    // so the raw bytes miss and every file looks like unpushed work. Check the
+    // normalized form too — matching either means git has this content.
+    return knownBlob(content) || knownBlob(content.replace(/\r\n/g, "\n"));
+  };
+
+  const unchanged: string[] = [];
+  const protectedPaths: Array<{ path: string; by: string | null; ref: string | null }> = [];
+  const toSend: OutFile[] = [];
+  for (const f of files) {
+    const current = mirrorHash.get(f.path);
+    if (!current) {
+      toSend.push(f); // not in the mirror yet
+      continue;
+    }
+    if (current === hashOf(f.content)) {
+      unchanged.push(f.path); // identical — sending it would be pure waste
+      continue;
+    }
+    // The mirror differs. Fetch what it holds and decide if losing it is safe.
+    const held = (await rpc("read_code", { projectId: project.id, path: f.path, maxChars: MAX_CHARS })) as {
+      content: string;
+      syncedBy: string | null;
+      ref: string | null;
+      truncated?: boolean;
+    };
+    if (!held.truncated && !inGitHistory(held.content)) {
+      protectedPaths.push({ path: f.path, by: held.syncedBy, ref: held.ref });
+      continue;
+    }
+    f.baseHash = current; // safe to fast-forward: git still has this version
+    toSend.push(f);
+  }
+
+  if (unchanged.length) console.log(`  ${unchanged.length} file(s) already identical in the mirror — not resent`);
+  if (protectedPaths.length) {
+    console.error(`\n!! ${protectedPaths.length} file(s) SKIPPED to protect work that is not in git:`);
+    for (const p of protectedPaths) {
+      console.error(`   ${p.path}  (mirror version by ${p.by ?? "unknown"}${p.ref ? `, ref ${p.ref}` : ""})`);
+    }
+    console.error("   read_code those paths, merge into your working copy, commit, then re-run.");
+  }
+  files.length = 0;
+  files.push(...toSend);
+  if (!files.length) {
+    console.log(`${projectName}: nothing to sync${protectedPaths.length ? ` (${protectedPaths.length} protected)` : ""}`);
+    if (protectedPaths.length) process.exit(2);
+    return;
+  }
+
   // Pack batches under BOTH limits: file count and payload bytes.
-  const batches: Array<Array<{ path: string; content: string }>> = [];
-  let current: Array<{ path: string; content: string }> = [];
+  const batches: OutFile[][] = [];
+  let current: OutFile[] = [];
   let bytes = 0;
   for (const f of files) {
     const cost = f.content.length + f.path.length + 32; // ~JSON overhead per entry
@@ -127,6 +211,7 @@ async function main() {
 
   let synced = 0;
   let batchNo = 0;
+  const conflicted: Array<{ path: string; currentSyncedBy: string | null; currentRef: string | null }> = [];
   for (const batch of batches) {
     batchNo++;
     const kb = Math.round(batch.reduce((s, f) => s + f.content.length, 0) / 1024);
@@ -135,13 +220,29 @@ async function main() {
       ref,
       files: batch,
       actor: "sync-repo",
-    })) as { synced: number; skipped: Array<{ path: string; reason: string }> };
+    })) as {
+      synced: number;
+      skipped: Array<{ path: string; reason: string }>;
+      conflicts?: Array<{ path: string; currentSyncedBy: string | null; currentRef: string | null }>;
+    };
     synced += r.synced;
+    conflicted.push(...(r.conflicts ?? []));
     console.log(`  batch ${batchNo}/${batches.length}: ${r.synced}/${batch.length} files, ${kb} KB`);
     for (const s of r.skipped ?? []) console.log(`  skipped ${s.path}: ${s.reason}`);
   }
   const totalKb = Math.round(files.reduce((s, f) => s + f.content.length, 0) / 1024);
   console.log(`${projectName}: synced ${synced}/${files.length} files (${totalKb} KB)${ref ? ` @ ${ref}` : ""}`);
+
+  if (conflicted.length) {
+    // Loud and non-zero: a silent "success" here is what let a day's work be
+    // overwritten before anyone noticed.
+    console.error(`\n!! ${conflicted.length} file(s) NOT synced — someone changed them in the mirror after you last read them:`);
+    for (const c of conflicted) {
+      console.error(`   ${c.path}  (currently ${c.currentSyncedBy ?? "unknown"}${c.currentRef ? `, ref ${c.currentRef}` : ""})`);
+    }
+    console.error("   Nothing was lost. Read those paths with read_code, merge, and re-run.");
+    process.exit(2);
+  }
 }
 
 main().catch((e) => {

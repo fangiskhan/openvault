@@ -11,6 +11,7 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:backup": "tsx scripts/backup.ts",
+    "embed": "tsx scripts/embed.ts",
     "pg:schema": "node scripts/make-postgres-schema.mjs",
     "pg:push": "node scripts/make-postgres-schema.mjs && prisma db push --schema prisma/schema.postgres.prisma",
     "vercel-build": "node scripts/make-postgres-schema.mjs && DATABASE_URL=${DATABASE_URL_UNPOOLED:-$DATABASE_URL} prisma db push --schema prisma/schema.postgres.prisma --skip-generate && prisma generate --schema prisma/schema.postgres.prisma && next build",

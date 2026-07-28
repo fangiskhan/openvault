@@ -159,6 +159,22 @@ YOUR job is the judgment: splitting raw content into good notes.
             ],
           },
         ],
+        // Automatic capture: records WHICH files a session touched, so the
+        // vault has a factual trail even when an agent forgets to write a
+        // handover. It posts filenames and tool names only — never file
+        // contents or command output — and fails silently so a vault that is
+        // down can never interrupt anyone's work.
+        PostToolUse: [
+          {
+            matcher: "Edit|Write|NotebookEdit",
+            hooks: [
+              {
+                type: "command",
+                command: `curl -s -m 2 -X POST ${base}/api/activity -H "content-type: application/json" -d "{\\"projectId\\":\\"${project.id}\\",\\"tool\\":\\"$CLAUDE_TOOL_NAME\\",\\"file\\":\\"$CLAUDE_TOOL_FILE_PATH\\"}" || true`,
+              },
+            ],
+          },
+        ],
       },
     };
     return new Response(JSON.stringify(hooks, null, 2), {

@@ -142,6 +142,12 @@ model Item {
   // itself; the audit trail keeps the fuller history.
   createdBy String?
   updatedBy String?
+  // Optional semantic layer (see src/lib/embeddings.ts). JSON text rather than
+  // a pgvector column so one schema still serves SQLite and Postgres.
+  // embedHash records which title+body the vector was built from, so a
+  // re-embed only touches notes that actually changed.
+  embedding String?
+  embedHash String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 

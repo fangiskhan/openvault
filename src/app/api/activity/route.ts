@@ -1,0 +1,65 @@
+import { z } from "zod";
+import { prisma } from "@/lib/db";
+import { isAuthed } from "@/lib/auth";
+import { resolveBearer } from "@/lib/accounts";
+import { secretsRequired } from "@/lib/security";
+import { normalizeRepoPath } from "@/lib/code";
+import { badRequest } from "@/lib/http";
+import { rateLimit, clientKey, tooMany } from "@/lib/ratelimit";
+
+// POST /api/activity — automatic capture from a PostToolUse hook.
+//
+// The vault's memory otherwise depends on an agent CHOOSING to write a note,
+// which is a habit, not a guarantee. This records the factual trail — who
+// touched which file, with which tool, when — so a session leaves evidence
+// even when nobody writes prose. Deliberately narrow: filenames and tool
+// names, never file contents or command output, so a shared vault does not
+// become an exfiltration channel for whatever an agent happened to read.
+//
+// Stored as AuditEvent rows: append-only by design, already surfaced by
+// get_recent_activity, and no new table to back up.
+const schema = z.object({
+  projectId: z.string().min(1),
+  tool: z.string().max(60).optional(),
+  file: z.string().max(400).optional(),
+  actor: z.string().max(120).optional(),
+});
+
+export async function POST(req: Request) {
+  // A busy session fires this constantly; the cap keeps a runaway loop from
+  // filling the audit log.
+  if (!rateLimit(`activity:${clientKey(req)}`, 600, 60_000)) return tooMany("too many activity events");
+
+  const account = await resolveBearer(req);
+  if (!account && secretsRequired() && !(await isAuthed())) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const parsed = schema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return badRequest(parsed.error.flatten());
+  const { projectId, tool, file } = parsed.data;
+
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+  if (!project) return badRequest("unknown projectId");
+
+  // Hooks substitute empty strings when a variable is unset; treat those as absent.
+  const path = file && file.trim() && file !== "$CLAUDE_TOOL_FILE_PATH" ? normalizeRepoPath(file.trim()) : null;
+  const toolName = tool && tool.trim() && tool !== "$CLAUDE_TOOL_NAME" ? tool.trim() : "edit";
+  if (!path) return Response.json({ ok: true, skipped: "no file path" });
+
+  const by = account?.username ?? parsed.data.actor ?? "session";
+
+  // One row per file per actor per hour: a session editing the same file forty
+  // times is one fact, not forty. Keeps the trail readable and the log small.
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  const recent = await prisma.auditEvent.findFirst({
+    where: { action: "touched", actor: by, target: projectId, detail: path, createdAt: { gte: hourAgo } },
+    select: { id: true },
+  });
+  if (recent) return Response.json({ ok: true, deduped: true });
+
+  await prisma.auditEvent.create({
+    data: { action: "touched", actor: by, target: projectId, detail: path },
+  });
+  return Response.json({ ok: true, recorded: { file: path, tool: toolName, by } });
+}

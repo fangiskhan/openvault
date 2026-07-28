@@ -21,7 +21,8 @@ Working v1: projects, status, cited briefings, multi-user accounts with roles an
 
 - Projects with connections; rename, export and delete from the sidebar
 - Markdown notes with `[[wikilinks]]`, backlinks, and an **arc diagram** of the whole vault: notes run left to right grouped by project and ordered by age, so every arc that leaves its colour band is a cross-project connection. Toggle the inferred layer to see the links nobody drew.
-- Ranked search scoped to one project, connected projects, or the whole vault. Ask in natural language: the query is tokenized and results rank by how many terms a note covers, so "why no server-side AI" finds the note that answers it. `"Quoted"` queries stay literal.
+- Ranked search scoped to one project, connected projects, or the whole vault. Ask in natural language: the query is tokenized and results rank by how many terms a note covers, so "why no server-side AI" finds the note that answers it. `"Quoted"` queries stay literal. Optionally blend in **semantic search** (below) to also find notes that share meaning but none of the words.
+- Automatic capture: an optional `PostToolUse` hook records which files a session touched, so the vault has a factual trail even when an agent forgets to write a handover. Filenames and tool names only — never file contents or command output.
 - Excel and CSV upload, parsed into searchable tables
 - A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status
 - A one-screen briefing built from real items; each line links to its source
@@ -98,6 +99,25 @@ Download three files per project from the Connect agent modal (plus a vault-wide
 - A global `CLAUDE.md` download (`/api/connect-kit?file=global-claude`, saved to `~/.claude/CLAUDE.md`) puts the vault-first rule into every session on your machine, any folder: search the vault before asking the human, admit "no record" instead of guessing, write back what you learn. The MCP server also sends this steering in its connect-time instructions, so connected agents get the rule even without the file; the file makes it stick across every surface. Connecting never modifies anyone's files: a server that could silently edit a client's standing orders would be an injection hole, so placing the file stays a human choice.
 
 For "what did everyone's agents do since yesterday", `get_recent_activity` returns each item, work intent and audit action from the last N hours, grouped and attributed.
+
+## Optional: semantic search
+
+Lexical ranking is the default because it costs nothing, needs no model, and is reproducible. It has one real limit: it cannot tell *about the same thing* from *shares rare words* — the same limit that makes `find_project_bridges` score two unrelated projects that both hit an `httpx` error.
+
+Point OpenVault at any OpenAI-compatible embeddings endpoint and search blends meaning with wording. A local Ollama keeps it free and private:
+
+```bash
+# .env
+EMBEDDING_URL="http://localhost:11434/v1/embeddings"   # or https://api.openai.com/v1/embeddings
+EMBEDDING_MODEL="nomic-embed-text"                      # or text-embedding-3-small
+# EMBEDDING_KEY="sk-..."                                # omit for a local endpoint
+```
+
+```bash
+npm run embed     # embeds only notes whose text changed since last time
+```
+
+Results then rank on both signals (lexical leads; semantic surfaces notes that share no words with your question), and every hit carries its `semantic` score so you can see which layer found it. Leave the variables unset and nothing changes — no calls, no cost, no behaviour difference. If the endpoint is down, search silently falls back to lexical rather than failing.
 
 ## Token cost, measured
 

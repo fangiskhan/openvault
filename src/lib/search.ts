@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { CONTENT_TYPES } from "./validation";
+import { embed, embeddingsEnabled, parseVector, cosineVec } from "./embeddings";
 
 // Ranked search shared by the search MCP tool and GET /api/search.
 //
@@ -25,6 +26,8 @@ export type SearchHit = {
   project: { name: string; color: string | null };
   updatedAt: Date;
   score: number;
+  /** Present when the semantic layer contributed: 0..1 cosine similarity. */
+  semantic?: number;
 };
 
 export function queryTerms(query: string): string[] {
@@ -77,7 +80,8 @@ export async function searchItems(
   });
 
   const phraseLower = phrase.toLowerCase();
-  const scored = rows.map((r) => {
+  const lexical = new Map<string, number>();
+  for (const r of rows) {
     const title = r.title.toLowerCase();
     const body = r.body.toLowerCase();
     let matched = 0;
@@ -95,11 +99,73 @@ export async function searchItems(
     // A note carrying the whole phrase beats one that merely shares words.
     if (title.includes(phraseLower)) score += 40;
     else if (body.includes(phraseLower)) score += 20;
-    return { ...r, score };
-  });
+    if (score > 0) lexical.set(r.id, score);
+  }
 
-  return scored
-    .filter((r) => r.score > 0)
+  type Row = (typeof rows)[number];
+  const byId = new Map<string, Row>(rows.map((r) => [r.id, r]));
+  const semantic = new Map<string, number>();
+
+  // The semantic pass needs its OWN candidate pool. Re-ranking the lexical
+  // results would be pointless: a note that shares no words with the question
+  // never reaches the ranker, and those are exactly the ones this is for.
+  if (embeddingsEnabled()) {
+    try {
+      const [qv] = (await embed([trimmed])) ?? [];
+      if (qv) {
+        const pool = await prisma.item.findMany({
+          where: {
+            type: { in: [...CONTENT_TYPES] },
+            ...(projectIds ? { projectId: { in: projectIds } } : {}),
+            embedding: { not: null },
+          },
+          orderBy: { updatedAt: "desc" },
+          take: 2000,
+          select: {
+            id: true, title: true, type: true, status: true, body: true,
+            projectId: true, updatedAt: true, embedding: true,
+            project: { select: { name: true, color: true } },
+          },
+        });
+        for (const p of pool) {
+          const v = parseVector(p.embedding);
+          if (!v) continue;
+          const sim = cosineVec(qv, v);
+          if (sim < 0.25) continue; // below this it is noise, not relatedness
+          semantic.set(p.id, sim);
+          if (!byId.has(p.id)) {
+            // Drop the vector before it joins the result rows — callers get
+            // notes, not a few KB of floats per hit.
+            const rest: Row = {
+              id: p.id, title: p.title, type: p.type, status: p.status, body: p.body,
+              projectId: p.projectId, updatedAt: p.updatedAt, project: p.project,
+            };
+            byId.set(p.id, rest);
+          }
+        }
+      }
+    } catch {
+      // An embedding endpoint that is down must never take search down with it.
+    }
+  }
+
+  // Blend on a common scale: lexical normalized against the best lexical hit,
+  // cosine already 0..1. Lexical leads because exact wording is a strong signal
+  // when it exists; semantic carries the notes that share meaning but no words.
+  const maxLex = Math.max(1, ...lexical.values());
+  const out: SearchHit[] = [];
+  for (const [id, row] of byId) {
+    const lex = (lexical.get(id) ?? 0) / maxLex;
+    const sem = semantic.get(id) ?? 0;
+    if (lex === 0 && sem === 0) continue;
+    out.push({
+      ...row,
+      score: Math.round((lex * 0.6 + sem * 0.4) * 1000) / 1000,
+      ...(sem ? { semantic: Math.round(sem * 100) / 100 } : {}),
+    });
+  }
+
+  return out
     .sort((a, b) => b.score - a.score || b.updatedAt.getTime() - a.updatedAt.getTime())
     .slice(0, limit);
 }

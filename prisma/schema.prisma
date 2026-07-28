@@ -32,6 +32,7 @@ model Project {
   files         FileAsset[]
   codeFiles     CodeFile[]
   workIntents   WorkIntent[]
+  skills        ProjectSkill[]
   relationsFrom ProjectRelation[] @relation("fromProject")
   relationsTo   ProjectRelation[] @relation("toProject")
 }
@@ -55,6 +56,28 @@ model CodeFile {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, path])
+  @@index([projectId])
+}
+
+// A working convention this project expects its agents to follow: how to run
+// the tests, the review checklist, the deploy steps. Stored as a SKILL.md body
+// so it can be read in-session over MCP (no install) or downloaded into
+// ~/.claude/skills/. The point is that conventions travel WITH the project:
+// whoever connects next inherits them instead of rediscovering them.
+model ProjectSkill {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String // kebab-case; becomes the skill folder / slash-command name
+  description String // when to use it — this is what makes an agent reach for it
+  body        String // markdown instructions
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, name])
   @@index([projectId])
 }
 

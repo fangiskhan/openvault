@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { toSkillMarkdown } from "@/lib/skills";
 import { badRequest } from "@/lib/http";
 
 // GET /api/connect-kit?projectId=X&file=claude|hooks
@@ -126,6 +127,20 @@ YOUR job is the judgment: splitting raw content into good notes.
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true } });
   if (!project) return badRequest("unknown projectId");
 
+  // One of the project's own skills, as a SKILL.md for ~/.claude/skills/<name>/.
+  // Optional: agents already get these in-session via list_skills / get_skill.
+  if (file === "project-skill") {
+    const name = (url.searchParams.get("name") ?? "").trim().toLowerCase();
+    const skill = await prisma.projectSkill.findUnique({ where: { projectId_name: { projectId, name } } });
+    if (!skill) return badRequest("unknown skill");
+    return new Response(toSkillMarkdown(skill), {
+      headers: {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="SKILL.md"`,
+      },
+    });
+  }
+
   if (file === "hooks") {
     const hooks = {
       hooks: {
@@ -231,6 +246,11 @@ Not connected? \`claude mcp add openvault ${base}/api/mcp --transport http --sco
 - If a session-start hook already injected the briefing, read it. Otherwise call
   \`get_briefing\` and \`get_recent_activity\` (projectId above) to load current
   state and what changed since yesterday.
+- **Call \`list_skills\` for this project and follow the ones that apply.** They
+  are this team's conventions — how the tests are run, what the review checks,
+  which traps to avoid — and they are rules, not suggestions. \`get_skill\` has
+  the full instructions. When you learn how this project wants something done,
+  record it with \`set_skill\` so the next agent inherits it.
 - **Check \`get_active_work\`** — another agent may already be editing the files
   you're about to touch.
 

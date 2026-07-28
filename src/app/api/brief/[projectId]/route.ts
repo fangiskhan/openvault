@@ -22,12 +22,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
   if (!project) return new Response("unknown project", { status: 404 });
 
   const scope = new URL(req.url).searchParams.get("scope") ?? "connected";
-  const [b, work] = await Promise.all([
+  const [b, work, skills] = await Promise.all([
     buildTemplatedBriefing(projectId, scope),
     prisma.workIntent.findMany({
       where: { projectId, status: { in: [...ACTIVE_WORK_STATUSES] } },
       orderBy: { updatedAt: "desc" },
       take: 10,
+    }),
+    prisma.projectSkill.findMany({
+      where: { projectId },
+      orderBy: { name: "asc" },
+      select: { name: true, description: true },
     }),
   ]);
 
@@ -52,6 +57,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
   if (b.recentlyUpdated.length) {
     lines.push("## Recently updated");
     for (const r of b.recentlyUpdated) lines.push(`- ${r.title} (${r.type}, ${r.projectName})`);
+    lines.push("");
+  }
+  if (skills.length) {
+    // The project's own rules, injected before the agent does anything — the
+    // whole point of storing skills on the project rather than each machine.
+    lines.push("## This project's skills — follow these, they are the team's conventions");
+    for (const s of skills) lines.push(`- ${s.name}: ${s.description}`);
+    lines.push(`(call get_skill with projectId ${project.id} and the name for full instructions)`);
     lines.push("");
   }
   lines.push(

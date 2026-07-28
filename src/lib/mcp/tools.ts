@@ -9,6 +9,7 @@ import { approveAccount, setRole } from "../accounts";
 import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 import { reviewWorkIntent } from "../work";
 import { searchItems, snippet } from "../search";
+import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
 
 // Text snippet used for similarity: title carries the most signal, body capped
@@ -763,6 +764,109 @@ export const tools: Tool[] = [
         })),
         audit,
       };
+    },
+  },
+
+  // ---- Per-project skills: conventions that travel with the project ----
+  {
+    name: "list_skills",
+    description:
+      "The working conventions this project expects agents to follow (how to run its tests, its review checklist, its deploy steps). Call this when you start work on a project and follow the ones that apply — they are the team's rules, not suggestions. Returns names + descriptions; use get_skill for the full instructions.",
+    inputSchema: { type: "object", properties: { projectId: { type: "string" } }, required: ["projectId"] },
+    handler: async (a) => {
+      const { projectId } = a as { projectId: string };
+      const skills = await prisma.projectSkill.findMany({
+        where: { projectId },
+        orderBy: { name: "asc" },
+        select: { name: true, description: true, updatedBy: true, updatedAt: true },
+      });
+      return {
+        projectId,
+        count: skills.length,
+        skills,
+        hint: skills.length ? "Call get_skill for any whose description matches what you're about to do." : "This project defines no skills yet; set_skill records one.",
+      };
+    },
+  },
+  {
+    name: "get_skill",
+    description: "Read one project skill in full (its instructions as markdown). Follow it for the current task.",
+    inputSchema: {
+      type: "object",
+      properties: { projectId: { type: "string" }, name: { type: "string" } },
+      required: ["projectId", "name"],
+    },
+    handler: async (a) => {
+      const { projectId, name } = a as { projectId: string; name: string };
+      const skill = await prisma.projectSkill.findUnique({
+        where: { projectId_name: { projectId, name: name.trim().toLowerCase() } },
+      });
+      if (!skill) throw new Error(`no skill '${name}' on this project (use list_skills)`);
+      return {
+        name: skill.name,
+        description: skill.description,
+        body: skill.body,
+        markdown: toSkillMarkdown(skill),
+        updatedBy: skill.updatedBy,
+        updatedAt: skill.updatedAt,
+      };
+    },
+  },
+  {
+    name: "set_skill",
+    description:
+      "Record or update a working convention for this project so every agent that connects later inherits it. Write it when you learn how this project wants something done — its test command, its release checklist, a trap to avoid. name is kebab-case; description decides when an agent reaches for it, so say WHEN to use it, not just what it is.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        name: { type: "string", description: "kebab-case, e.g. run-tests" },
+        description: { type: "string", description: "when to use this — the trigger, not just the topic" },
+        body: { type: "string", description: "the instructions, markdown" },
+        actor: { type: "string", description: "who is writing it (ignored when authenticated)" },
+      },
+      required: ["projectId", "name", "description", "body"],
+    },
+    handler: async (a, ctx) => {
+      const { projectId, description, body } = a as { projectId: string; description: string; body: string };
+      const name = validateSkillName((a as { name: string }).name);
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      if (!description.trim()) throw new Error("description required — it is what makes an agent reach for the skill");
+      if (body.length > MAX_SKILL_BODY) throw new Error(`body must be under ${MAX_SKILL_BODY} characters`);
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+      if (!project) throw new Error("project not found (use list_projects)");
+
+      const saved = await prisma.projectSkill.upsert({
+        where: { projectId_name: { projectId, name } },
+        create: { projectId, name, description: description.trim(), body, createdBy: actor, updatedBy: actor },
+        update: { description: description.trim(), body, updatedBy: actor },
+        select: { name: true, updatedAt: true },
+      });
+      await prisma.auditEvent.create({
+        data: { action: "set_skill", actor, target: projectId, detail: name },
+      });
+      return { ...saved, by: actor, note: "Agents connecting to this project now see it in list_skills and in the session-start briefing." };
+    },
+  },
+  {
+    name: "delete_skill",
+    description: "Remove a project skill. Owner/executive only, since it changes the rules everyone else inherits.",
+    inputSchema: {
+      type: "object",
+      properties: { projectId: { type: "string" }, name: { type: "string" } },
+      required: ["projectId", "name"],
+    },
+    handler: async (a, ctx) => {
+      const approver = requireApprover(ctx);
+      const { projectId, name } = a as { projectId: string; name: string };
+      const gone = await prisma.projectSkill
+        .delete({ where: { projectId_name: { projectId, name: name.trim().toLowerCase() } } })
+        .catch(() => null);
+      if (!gone) throw new Error(`no skill '${name}' on this project`);
+      await prisma.auditEvent.create({
+        data: { action: "delete_skill", actor: approver.username, target: projectId, detail: gone.name },
+      });
+      return { deleted: gone.name, by: approver.username };
     },
   },
 

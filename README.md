@@ -58,9 +58,16 @@ Drop the `--header` for open local use with no `MCP_TOKEN` set.
 | Knowledge graph | `get_graph` · `get_links` · `find_path` · `suggest_links` · `find_project_bridges` |
 | Write (attributed) | `set_status` · `append_update` · `flag_issue` · `request_info` · `import_notes` (bulk: atomic notes + Map-of-Content + auto cross-links in one call) |
 | Code and coordination | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
+| Project skills | `list_skills` · `get_skill` · `set_skill` · `delete_skill` |
 | Identity and admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |
 
 Humans add content through the Upload and New note buttons. Agents never touch those; they read and write over MCP.
+
+## Skills travel with the project
+
+A project can carry its own working conventions — how its tests run, what its review checks, which traps to avoid — and any agent that connects inherits them. Record one with `set_skill`; it shows up in `list_skills` and, more usefully, in the **session-start briefing the hook already injects**, so the next agent reads the project's rules before it does anything. No install, no per-machine setup: the conventions live with the project rather than on one person's laptop.
+
+Anyone who prefers a real slash-command can download a skill as a `SKILL.md` for `~/.claude/skills/<name>/`, but that's optional — agents read them in-session over MCP.
 
 ## How agents share code
 

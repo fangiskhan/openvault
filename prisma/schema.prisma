@@ -45,9 +45,14 @@ model CodeFile {
   id        String   @id @default(cuid())
   projectId String
   path      String // repo-relative, forward slashes, validated (no traversal)
+  // Files larger than the per-chunk cap are stored as several rows and
+  // reassembled on read, so a 1.2 MB module still lands in the mirror instead
+  // of being silently missing. part 0 is the whole file for ordinary sizes.
+  part      Int      @default(0)
+  parts     Int      @default(1) // how many rows this file spans
   content   String
-  hash      String // sha256 of content — cheap change detection via get_code_map
-  size      Int
+  hash      String // sha256 of the WHOLE file — change detection via get_code_map
+  size      Int // total size of the whole file, not of this chunk
   ref       String? // branch/commit label the syncing agent reported
   syncedBy  String? // username/actor that pushed this version
   createdAt DateTime @default(now())
@@ -55,8 +60,9 @@ model CodeFile {
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  @@unique([projectId, path])
+  @@unique([projectId, path, part])
   @@index([projectId])
+  @@index([projectId, path])
 }
 
 // A working convention this project expects its agents to follow: how to run

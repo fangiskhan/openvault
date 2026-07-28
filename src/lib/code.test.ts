@@ -1,5 +1,34 @@
 import { describe, it, expect } from "vitest";
-import { isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "./code";
+import { isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap, chunkContent, MAX_FILE_CHARS } from "./code";
+
+// The defect this guards: a hard per-file cap left a permanent hole in the code
+// mirror at exactly a project's biggest modules — a 1.25 MB component was
+// simply absent, so an agent browsing the mirror could not see it at all.
+describe("chunkContent", () => {
+  it("leaves an ordinary file as a single chunk", () => {
+    expect(chunkContent("small file")).toEqual(["small file"]);
+    const exact = "x".repeat(MAX_FILE_CHARS);
+    expect(chunkContent(exact)).toHaveLength(1);
+  });
+
+  it("splits a large file and rejoins to the exact original", () => {
+    const big = "abcdefghij".repeat(120_000); // 1.2 MB, like the real Plaza.tsx
+    const parts = chunkContent(big);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every((p) => p.length <= MAX_FILE_CHARS)).toBe(true);
+    expect(parts.join("")).toBe(big);
+  });
+
+  it("splits on a custom size and never loses a character", () => {
+    const parts = chunkContent("abcdefg", 3);
+    expect(parts).toEqual(["abc", "def", "g"]);
+    expect(parts.join("")).toBe("abcdefg");
+  });
+
+  it("handles the empty file without producing zero chunks", () => {
+    expect(chunkContent("")).toEqual([""]);
+  });
+});
 
 // sync_code takes paths straight from agents, so the validator is the only
 // thing between a hostile/buggy client and junk (or traversal) keys in the DB.

@@ -14,12 +14,16 @@ export async function GET(req: Request) {
   if (!projectId) return badRequest("missing projectId");
 
   if (path) {
-    const file = await prisma.codeFile.findUnique({ where: { projectId_path: { projectId, path } } });
-    if (!file) return badRequest("file not in the mirror");
+    // Large files span several rows; rejoin them in order.
+    const rows = await prisma.codeFile.findMany({ where: { projectId, path }, orderBy: { part: "asc" } });
+    if (!rows.length) return badRequest("file not in the mirror");
+    const file = rows[0];
     return Response.json({
       path: file.path,
-      content: file.content,
+      content: rows.map((r) => r.content).join(""),
       hash: file.hash,
+      size: file.size,
+      parts: rows.length,
       ref: file.ref,
       syncedBy: file.syncedBy,
       updatedAt: file.updatedAt,
@@ -27,9 +31,9 @@ export async function GET(req: Request) {
   }
 
   const files = await prisma.codeFile.findMany({
-    where: { projectId },
+    where: { projectId, part: 0 }, // one row per file, not per chunk
     orderBy: { path: "asc" },
-    select: { path: true, hash: true, size: true, ref: true, syncedBy: true, updatedAt: true },
+    select: { path: true, hash: true, size: true, parts: true, ref: true, syncedBy: true, updatedAt: true },
   });
   return Response.json({ projectId, fileCount: files.length, files });
 }

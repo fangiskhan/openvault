@@ -14,8 +14,16 @@ import path from "node:path";
 
 const [dir, projectName, vaultArg] = process.argv.slice(2);
 const VAULT = vaultArg || "http://localhost:6900";
-const MAX_CHARS = 200_000;
-const MAX_FILES = 500;
+// Files above this are stored chunked by the server, not skipped; this is only
+// a sanity bound against a runaway generated artifact.
+const MAX_CHARS = 4_000_000;
+const MAX_FILES = 2000;
+// Two independent batch limits. The server caps a call at 100 files, and the
+// deployed host (Vercel) rejects request bodies over 4.5 MB — so a batch of
+// large files can bust the byte limit long before the file limit. Batching on
+// count alone produced a 413 that looks like "the sync silently did nothing".
+const BATCH_FILES = 100;
+const BATCH_BYTES = 1_800_000;
 
 const EXCLUDE_DIRS = new Set([
   "node_modules", ".git", "__pycache__", "models", "dist", ".next", "storage",
@@ -101,18 +109,39 @@ async function main() {
     }
   }
 
+  // Pack batches under BOTH limits: file count and payload bytes.
+  const batches: Array<Array<{ path: string; content: string }>> = [];
+  let current: Array<{ path: string; content: string }> = [];
+  let bytes = 0;
+  for (const f of files) {
+    const cost = f.content.length + f.path.length + 32; // ~JSON overhead per entry
+    if (current.length && (current.length >= BATCH_FILES || bytes + cost > BATCH_BYTES)) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(f);
+    bytes += cost;
+  }
+  if (current.length) batches.push(current);
+
   let synced = 0;
-  for (let i = 0; i < files.length; i += 80) {
+  let batchNo = 0;
+  for (const batch of batches) {
+    batchNo++;
+    const kb = Math.round(batch.reduce((s, f) => s + f.content.length, 0) / 1024);
     const r = (await rpc("sync_code", {
       projectId: project.id,
       ref,
-      files: files.slice(i, i + 80),
+      files: batch,
       actor: "sync-repo",
     })) as { synced: number; skipped: Array<{ path: string; reason: string }> };
     synced += r.synced;
-    for (const s of r.skipped ?? []) console.log(`skipped ${s.path}: ${s.reason}`);
+    console.log(`  batch ${batchNo}/${batches.length}: ${r.synced}/${batch.length} files, ${kb} KB`);
+    for (const s of r.skipped ?? []) console.log(`  skipped ${s.path}: ${s.reason}`);
   }
-  console.log(`${projectName}: synced ${synced}/${files.length} files${ref ? ` @ ${ref}` : ""}`);
+  const totalKb = Math.round(files.reduce((s, f) => s + f.content.length, 0) / 1024);
+  console.log(`${projectName}: synced ${synced}/${files.length} files (${totalKb} KB)${ref ? ` @ ${ref}` : ""}`);
 }
 
 main().catch((e) => {

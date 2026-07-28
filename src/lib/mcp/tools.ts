@@ -6,7 +6,7 @@ import { buildTemplatedBriefing } from "../briefing/templated";
 import { ITEM_STATUSES, CONTENT_TYPES, importSchema } from "../validation";
 import { importProject } from "../import";
 import { approveAccount, setRole } from "../accounts";
-import { MAX_SYNC_FILES, MAX_FILE_CHARS, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
+import { MAX_SYNC_FILES, MAX_TOTAL_FILE_CHARS, chunkContent, WORK_STATUSES, ACTIVE_WORK_STATUSES, isValidRepoPath, normalizeRepoPath, hashContent, pathOverlap } from "../code";
 import { reviewWorkIntent } from "../work";
 import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
@@ -444,7 +444,7 @@ export const tools: Tool[] = [
   {
     name: "sync_code",
     description:
-      "Push file snapshots into the project's shared code mirror so other agents can browse them (get_code_map / read_code) without pulling git. Send only changed files (compare hashes via get_code_map first). Max 100 files per call, 200k chars per file.",
+      "Push file snapshots into the project's shared code mirror so other agents can browse them (get_code_map / read_code) without pulling git. Send only CHANGED files — diff your local files against get_code_map hashes first. Max 100 files per call; larger files are chunked and rejoined automatically. DO NOT use this to seed a whole repo: contents travel as tool arguments, so a few hundred files would cost you roughly a million output tokens. For a first sync or any bulk update, run the repo's script instead, which reads the files from disk and batches them over HTTP: npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl].",
     inputSchema: {
       type: "object",
       properties: {
@@ -488,23 +488,30 @@ export const tools: Tool[] = [
           skipped.push({ path: f.path, reason: "invalid repo path" });
           continue;
         }
-        if (f.content.length > MAX_FILE_CHARS) {
-          skipped.push({ path: f.path, reason: `over ${MAX_FILE_CHARS} chars` });
+        if (f.content.length > MAX_TOTAL_FILE_CHARS) {
+          skipped.push({ path: f.path, reason: `over ${MAX_TOTAL_FILE_CHARS} chars even chunked` });
           continue;
         }
         const path = normalizeRepoPath(f.path);
-        const data = {
-          content: f.content,
+        // Big files are stored across several rows and rejoined on read, so a
+        // project's largest modules stay in the mirror instead of vanishing.
+        const chunks = chunkContent(f.content);
+        const shared = {
           hash: hashContent(f.content),
           size: f.content.length,
+          parts: chunks.length,
           ref: ref ?? null,
           syncedBy: actor,
         };
-        await prisma.codeFile.upsert({
-          where: { projectId_path: { projectId, path } },
-          create: { projectId, path, ...data },
-          update: data,
-        });
+        for (let part = 0; part < chunks.length; part++) {
+          await prisma.codeFile.upsert({
+            where: { projectId_path_part: { projectId, path, part } },
+            create: { projectId, path, part, content: chunks[part], ...shared },
+            update: { content: chunks[part], ...shared },
+          });
+        }
+        // A file that shrank leaves orphan chunks behind; drop them.
+        await prisma.codeFile.deleteMany({ where: { projectId, path, part: { gte: chunks.length } } });
         synced++;
       }
 
@@ -528,10 +535,12 @@ export const tools: Tool[] = [
     inputSchema: { type: "object", properties: { projectId: { type: "string" } }, required: ["projectId"] },
     handler: async (a) => {
       const { projectId } = a as { projectId: string };
+      // Only chunk 0 carries the file-level metadata, so a chunked file appears
+      // once with its whole size rather than once per stored row.
       const files = await prisma.codeFile.findMany({
-        where: { projectId },
+        where: { projectId, part: 0 },
         orderBy: { path: "asc" },
-        select: { path: true, hash: true, size: true, ref: true, syncedBy: true, updatedAt: true },
+        select: { path: true, hash: true, size: true, parts: true, ref: true, syncedBy: true, updatedAt: true },
       });
       return { projectId, fileCount: files.length, files };
     },
@@ -546,11 +555,22 @@ export const tools: Tool[] = [
     },
     handler: async (a) => {
       const { projectId, path } = a as { projectId: string; path: string };
-      const file = await prisma.codeFile.findUnique({
-        where: { projectId_path: { projectId, path: normalizeRepoPath(path) } },
+      const rows = await prisma.codeFile.findMany({
+        where: { projectId, path: normalizeRepoPath(path) },
+        orderBy: { part: "asc" },
       });
-      if (!file) throw new Error("file not in the mirror (see get_code_map; an agent may need to sync_code it)");
-      return { path: file.path, content: file.content, hash: file.hash, ref: file.ref, syncedBy: file.syncedBy, updatedAt: file.updatedAt };
+      if (!rows.length) throw new Error("file not in the mirror (see get_code_map; an agent may need to sync_code it)");
+      const file = rows[0];
+      return {
+        path: file.path,
+        content: rows.map((r) => r.content).join(""), // rejoined from its chunks
+        hash: file.hash,
+        size: file.size,
+        parts: rows.length,
+        ref: file.ref,
+        syncedBy: file.syncedBy,
+        updatedAt: file.updatedAt,
+      };
     },
   },
   {

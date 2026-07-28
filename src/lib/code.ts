@@ -6,7 +6,22 @@ import crypto from "node:crypto";
 // stepping on the same files blind.
 
 export const MAX_SYNC_FILES = 100; // files per sync_code call
-export const MAX_FILE_CHARS = 200_000; // per-file content cap (~200 KB)
+// Chunk size, not a file-size limit: a file longer than this is stored as
+// several rows and reassembled on read. It used to be a hard cap, which left a
+// permanent hole in the mirror at exactly a project's biggest modules — the
+// files an agent most needs to read.
+export const MAX_FILE_CHARS = 200_000;
+// A sanity bound on one file so a runaway generated artifact can't fill the
+// vault. Well above any hand-written module.
+export const MAX_TOTAL_FILE_CHARS = 4_000_000;
+
+// Split a file into storable chunks. Ordinary files yield exactly one.
+export function chunkContent(content: string, size = MAX_FILE_CHARS): string[] {
+  if (content.length <= size) return [content];
+  const out: string[] = [];
+  for (let i = 0; i < content.length; i += size) out.push(content.slice(i, i + size));
+  return out;
+}
 export const WORK_STATUSES = ["planning", "in_progress", "in_review", "done", "abandoned"] as const;
 // Statuses that count as "someone is actively on this" for overlap warnings
 // and the active-work board. in_review is still active: the code isn't merged.

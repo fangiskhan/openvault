@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { isAuthed } from "@/lib/auth";
 import { resolveBearer } from "@/lib/accounts";
 import { secretsRequired } from "@/lib/security";
-import { normalizeRepoPath } from "@/lib/code";
+import { isValidRepoPath, normalizeRepoPath } from "@/lib/code";
 import { badRequest } from "@/lib/http";
 import { rateLimit, clientKey, tooMany } from "@/lib/ratelimit";
 
@@ -42,10 +42,21 @@ export async function POST(req: Request) {
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
   if (!project) return badRequest("unknown projectId");
 
-  // Hooks substitute empty strings when a variable is unset; treat those as absent.
-  const path = file && file.trim() && file !== "$CLAUDE_TOOL_FILE_PATH" ? normalizeRepoPath(file.trim()) : null;
-  const toolName = tool && tool.trim() && tool !== "$CLAUDE_TOOL_NAME" ? tool.trim() : "edit";
-  if (!path) return Response.json({ ok: true, skipped: "no file path" });
+  // Only repo-relative paths are stored. An absolute path pins one laptop's
+  // directory layout into a shared vault and never matches the code mirror,
+  // whose paths come from `git ls-files` — so it is worse than no row at all.
+  // This also catches a hook that posted an unexpanded shell variable or an
+  // empty string, which is how the original curl-based hook failed: it recorded
+  // nothing while the server kept answering 200. The reason is echoed back so a
+  // misconfigured hook is diagnosable instead of merely quiet.
+  const raw = file?.trim() ?? "";
+  const candidate = raw ? normalizeRepoPath(raw) : "";
+  if (!candidate) return Response.json({ ok: true, skipped: "no file path" });
+  if (!isValidRepoPath(candidate)) {
+    return Response.json({ ok: true, skipped: "not a repo-relative path", got: candidate.slice(0, 120) });
+  }
+  const path = candidate;
+  const toolName = tool?.trim() && !tool.startsWith("$") ? tool.trim() : "edit";
 
   const by = account?.username ?? parsed.data.actor ?? "session";
 

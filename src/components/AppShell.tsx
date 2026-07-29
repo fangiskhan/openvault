@@ -1053,6 +1053,9 @@ export default function AppShell() {
                   <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=hooks`} title="Merge into .claude/settings.json — injects the briefing at session start">
                     Hooks
                   </a>
+                  <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=activity-script`} title="Save as .claude/openvault-activity.mjs — the PostToolUse hook above runs this">
+                    Activity
+                  </a>
                   <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=commit-hook`} title="Save as .git/hooks/post-commit — every commit auto-syncs its files to the code mirror">
                     Git hook
                   </a>
@@ -1060,8 +1063,10 @@ export default function AppShell() {
               ))}
               <p className="empty" style={{ marginTop: 6 }}>
                 <code>CLAUDE.md</code> → repo root · <code>Hooks</code> → merge into <code>.claude/settings.json</code>{" "}
-                (SessionStart injects this vault&apos;s briefing) · <code>Git hook</code> → save as{" "}
-                <code>.git/hooks/post-commit</code> (each commit auto-syncs its changed files to the code mirror).
+                (SessionStart injects this vault&apos;s briefing) · <code>Activity</code> → save as{" "}
+                <code>.claude/openvault-activity.mjs</code> (the PostToolUse hook runs it; records which files a session
+                touched, never their contents) · <code>Git hook</code> → save as <code>.git/hooks/post-commit</code>{" "}
+                (each commit auto-syncs its changed files to the code mirror).
               </p>
               <div className="copyrow" style={{ marginTop: 10 }}>
                 <span className="truncate" style={{ flex: 1 }}>

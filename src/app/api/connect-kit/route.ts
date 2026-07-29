@@ -164,13 +164,21 @@ YOUR job is the judgment: splitting raw content into good notes.
         // handover. It posts filenames and tool names only — never file
         // contents or command output — and fails silently so a vault that is
         // down can never interrupt anyone's work.
+        //
+        // This runs a script rather than a bare curl because Claude Code
+        // delivers the tool call as JSON on STDIN. There are no $CLAUDE_TOOL_*
+        // environment variables (the documented set is CLAUDE_PROJECT_DIR,
+        // CLAUDE_PLUGIN_*, CLAUDE_CODE_*, CLAUDE_EFFORT), so a curl that
+        // interpolates them sends empty strings and records nothing — silently,
+        // because the server still answers 200. Download the companion script
+        // from ?file=activity-script and save it next to this settings file.
         PostToolUse: [
           {
             matcher: "Edit|Write|NotebookEdit",
             hooks: [
               {
                 type: "command",
-                command: `curl -s -m 2 -X POST ${base}/api/activity -H "content-type: application/json" -d "{\\"projectId\\":\\"${project.id}\\",\\"tool\\":\\"$CLAUDE_TOOL_NAME\\",\\"file\\":\\"$CLAUDE_TOOL_FILE_PATH\\"}" || true`,
+                command: `node "$CLAUDE_PROJECT_DIR/.claude/openvault-activity.mjs"`,
               },
             ],
           },
@@ -181,6 +189,83 @@ YOUR job is the judgment: splitting raw content into good notes.
       headers: {
         "content-type": "application/json",
         "content-disposition": `attachment; filename="openvault-hooks.settings.json"`,
+      },
+    });
+  }
+
+  // The companion to the PostToolUse hook above. Save as
+  // .claude/openvault-activity.mjs in the repo.
+  if (file === "activity-script") {
+    const js = `// Records which file a Claude Code session just touched, for this project's
+// OpenVault activity trail. Filenames and tool names only — never file
+// contents, never command output.
+//
+// This is a script, not a curl one-liner, for one reason: a PostToolUse hook
+// receives the tool call as JSON on STDIN. Claude Code exposes no
+// $CLAUDE_TOOL_NAME or $CLAUDE_TOOL_FILE_PATH — the documented environment is
+// CLAUDE_PROJECT_DIR, CLAUDE_PLUGIN_*, CLAUDE_CODE_* and CLAUDE_EFFORT. A hook
+// that interpolates the former posts empty strings and records nothing, and
+// because the server still answers 200 nobody ever finds out.
+//
+// Set OPENVAULT_TOKEN to your ovk_ account token when the vault requires auth
+// (any deployment with secrets configured); without it the POST is rejected.
+import { relative, isAbsolute } from "node:path";
+
+const VAULT = "${base}";
+const PROJECT_ID = "${project.id}";
+const TOKEN = (process.env.OPENVAULT_TOKEN ?? "").replace(/^\\uFEFF/, "").trim();
+
+async function readStdin() {
+  let data = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) data += chunk;
+  return data;
+}
+
+async function main() {
+  const payload = JSON.parse((await readStdin()) || "{}");
+  const input = payload.tool_input ?? {};
+  // NotebookEdit carries notebook_path; Edit and Write use file_path.
+  const raw = input.file_path ?? input.notebook_path ?? "";
+  if (!raw) return;
+
+  // Store repo-relative paths. An absolute path would pin one laptop's
+  // directory layout into a shared vault, and would not line up with the code
+  // mirror, whose paths come from \`git ls-files\`.
+  const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const file = (isAbsolute(raw) ? relative(root, raw) : raw).replace(/\\\\/g, "/");
+  if (!file || file.startsWith("../")) return; // outside the repo — not ours to record
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 2000);
+  try {
+    await fetch(VAULT + "/api/activity", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(TOKEN ? { authorization: "Bearer " + TOKEN } : {}),
+      },
+      body: JSON.stringify({ projectId: PROJECT_ID, tool: payload.tool_name, file }),
+      signal: ctl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+main().catch((err) => {
+  // Always exits 0: a vault that is down, slow, or unreachable must never
+  // interrupt anyone's work. But a connection failure is the ONLY thing worth
+  // swallowing in silence — anything else is a bug in this hook, and the whole
+  // point of rewriting it was that the old one failed without a trace.
+  const offline = err?.name === "AbortError" || Boolean(err?.cause?.code ?? err?.code);
+  if (!offline) console.error("openvault activity hook: " + (err?.message ?? err));
+});
+`;
+    return new Response(js, {
+      headers: {
+        "content-type": "text/javascript; charset=utf-8",
+        "content-disposition": `attachment; filename="openvault-activity.mjs"`,
       },
     });
   }

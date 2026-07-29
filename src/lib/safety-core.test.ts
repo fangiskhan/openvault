@@ -249,6 +249,45 @@ describe("code mirror: concurrent writes and recoverability", () => {
     expect(after[149]).toBe("line 150"); // Bob's change was refused, not half-applied
   });
 
+  it("tells the refused writer exactly what changed, as before/after snippets", async () => {
+    const p = await newProject("cas6");
+    const path = "services/ai_service.py";
+    const original = [
+      "def get_llm_response(messages_context, image_input):",
+      "    if image_input:",
+      "        model_to_use = getattr(constants, 'VISION_MODEL')",
+      "        last_msg = messages_context[-1]",
+      "    return call(model_to_use)",
+    ].join("\n");
+    await sync({ projectId: p.id, files: [{ path, content: original }] });
+    const start = await readCode(p.id, path);
+
+    // Alice pins the vision model and lands first.
+    const alicesVersion = original.replace(
+      "        model_to_use = getattr(constants, 'VISION_MODEL')",
+      "        # FORCE gpt-4o for images, ignoring the config file to prevent crashes\n        model_to_use = \"gpt-4o\"",
+    );
+    expect((await sync({ projectId: p.id, files: [{ path, content: alicesVersion, baseHash: start.hash }] })).synced).toBe(1);
+
+    // Bob edits a different part of the same file, from the original he read.
+    const bobsVersion = original.replace("    return call(model_to_use)", "    return call(model_to_use, retries=3)");
+    const refused = await sync({ projectId: p.id, files: [{ path, content: bobsVersion, baseHash: start.hash }] }, bob);
+    expect(refused.synced).toBe(0);
+
+    const c = refused.conflicts[0] as unknown as {
+      theirChanges?: { changes?: Array<{ before: string; after: string }> };
+      hint: string;
+    };
+    // The refusal carries the actual change, not a coordinate.
+    expect(c.theirChanges?.changes?.length).toBe(1);
+    expect(c.theirChanges!.changes![0].before).toContain("getattr(constants, 'VISION_MODEL')");
+    expect(c.theirChanges!.changes![0].after).toContain('model_to_use = "gpt-4o"');
+    expect(c.theirChanges!.changes![0].after).toContain("FORCE gpt-4o for images");
+    // Context is included so the snippet can be located after the file moves.
+    expect(c.theirChanges!.changes![0].before).toContain("if image_input:");
+    expect(c.hint).toMatch(/before\/after snippets/);
+  });
+
   it("keeps the previous version recoverable after a manifest prune", async () => {
     const p = await newProject("cas4");
     await sync({ projectId: p.id, files: [{ path: "src/keep.ts", content: "kept" }] });

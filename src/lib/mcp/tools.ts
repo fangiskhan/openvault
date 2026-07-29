@@ -12,6 +12,13 @@ import { reviewWorkIntent } from "../work";
 import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
+import { diffHunks, type Hunk } from "../diff";
+
+// What a teammate changed under you while you were editing, in the form you can
+// act on: the exact text that was there and the exact text that replaced it.
+type TheirChanges =
+  | { changes: Hunk[]; andMore?: number }
+  | { rewritten: true; changedLines: number; totalLines: number };
 
 // Text snippet used for similarity: title carries the most signal, body capped
 // so one giant note can't dominate corpus building time.
@@ -495,7 +502,7 @@ export const tools: Tool[] = [
   {
     name: "sync_code",
     description:
-      "Push file snapshots into the project's shared code mirror so other agents can browse them (get_code_map / read_code) without pulling git. Send only CHANGED files — diff your local files against get_code_map hashes first. You MUST pass baseHash (the hash read_code returned before you edited) to replace a path that is already mirrored: the mirror holds ONE version per path and cannot merge, so the server needs the version you started from to tell whether someone wrote in between. Overwriting without it is refused, not silently applied. A clashing push is reported per-path so you can re-read, merge, and retry; pass force: true only to replace regardless. Superseded content is always recoverable via get_code_history, including files removed by a delete or a manifest prune. Max 100 files per call; larger files are chunked and rejoined automatically. DO NOT use this to seed a whole repo: contents travel as tool arguments, so a few hundred files would cost you roughly a million output tokens. For a first sync or any bulk update, run the repo's script instead, which reads the files from disk and batches them over HTTP: npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl].",
+      "Push file snapshots into the project's shared code mirror so other agents can browse them (get_code_map / read_code) without pulling git. Send only CHANGED files — diff your local files against get_code_map hashes first. You MUST pass baseHash (the hash read_code returned before you edited) to replace a path that is already mirrored: the mirror holds ONE version per path and cannot merge, so the server needs the version you started from to tell whether someone wrote in between. Overwriting without it is refused, not silently applied. A clashing push is reported per-path AND carries theirChanges: the exact before/after snippets of what the other agent changed while you were editing, computed by the server from the two stored versions. Apply those to your copy by searching for the 'before' text (never by line number — it will have moved) and retry with the new baseHash; pass force: true only to replace regardless. Superseded content is always recoverable via get_code_history, including files removed by a delete or a manifest prune. Max 100 files per call; larger files are chunked and rejoined automatically. DO NOT use this to seed a whole repo: contents travel as tool arguments, so a few hundred files would cost you roughly a million output tokens. For a first sync or any bulk update, run the repo's script instead, which reads the files from disk and batches them over HTTP: npx tsx scripts/sync-repo.ts <dir> <projectName> [vaultUrl].",
     inputSchema: {
       type: "object",
       properties: {
@@ -557,7 +564,15 @@ export const tools: Tool[] = [
       }
 
       const skipped: Array<{ path: string; reason: string }> = [];
-      const conflicts: Array<{ path: string; yourBase: string | null; currentHash: string | null; currentRef: string | null; currentSyncedBy: string | null; hint: string }> = [];
+      const conflicts: Array<{
+        path: string;
+        yourBase: string | null;
+        currentHash: string | null;
+        currentRef: string | null;
+        currentSyncedBy: string | null;
+        theirChanges?: TheirChanges;
+        hint: string;
+      }> = [];
       const overwrote: Array<{ path: string; previousHash: string; previousRef: string | null; previousBy: string | null }> = [];
       let synced = 0;
       for (const f of files) {
@@ -607,7 +622,7 @@ export const tools: Tool[] = [
               // that had never heard of it was to silently overwrite a
               // teammate — and the onboarding CLAUDE.md never mentioned it.
               if (!force && f.baseHash !== cur.hash) {
-                return { kind: "conflict" as const, cur, sentBase: Boolean(f.baseHash) };
+                return { kind: "conflict" as const, cur, sentBase: Boolean(f.baseHash), currentContent: rows.map((r) => r.content).join("") };
               }
               await archiveRows(tx, projectId, path, rows);
             }
@@ -643,15 +658,40 @@ export const tools: Tool[] = [
         );
 
         if (result.kind === "conflict") {
+          // What changed underneath you, as before/after SNIPPETS rather than
+          // line numbers. Both sides are already stored — the version you based
+          // on is in history under the hash you sent, and the current one is in
+          // the slot — so the server computes this itself. Nobody has to
+          // remember to record what they changed, and nobody can misreport it.
+          //
+          // Snippets rather than coordinates because a line number goes stale
+          // the moment anyone inserts a line above it and still resolves,
+          // pointing confidently at the wrong code. A snippet that is genuinely
+          // gone simply is not found.
+          let theirChanges: TheirChanges | undefined;
+          if (result.sentBase) {
+            const base = await prisma.codeVersion.findFirst({
+              where: { projectId, path, hash: f.baseHash },
+              orderBy: { createdAt: "desc" },
+            });
+            if (base) {
+              const d = diffHunks(base.content, result.currentContent);
+              if (d.kind === "hunks") theirChanges = { changes: d.hunks, ...(d.more ? { andMore: d.more } : {}) };
+              else if (d.kind === "rewritten") theirChanges = { rewritten: true, changedLines: d.changedLines, totalLines: d.totalLines };
+            }
+          }
           conflicts.push({
             path,
             yourBase: f.baseHash ?? null,
             currentHash: result.cur.hash,
             currentRef: result.cur.ref,
             currentSyncedBy: result.cur.syncedBy,
-            hint: result.sentBase
-              ? `${result.cur.syncedBy ?? "someone"} changed this since you read it. read_code it again, merge their changes into yours, then sync with baseHash ${result.cur.hash}. Pass force: true only if you mean to discard their version (the old one is kept in get_code_history either way).`
-              : `this path is already in the mirror and you sent no baseHash, so the server cannot tell whether you started from the current version. read_code it, then sync with baseHash ${result.cur.hash}. Pass force: true only if you mean to replace it whatever it holds.`,
+            ...(theirChanges ? { theirChanges } : {}),
+            hint: !result.sentBase
+              ? `this path is already in the mirror and you sent no baseHash, so the server cannot tell whether you started from the current version. read_code it, then sync with baseHash ${result.cur.hash}. Pass force: true only if you mean to replace it whatever it holds.`
+              : theirChanges
+                ? `${result.cur.syncedBy ?? "someone"} changed this since you read it — theirChanges lists exactly what, as before/after snippets. Apply those to YOUR copy (search for the 'before' text; it may have moved), then sync with baseHash ${result.cur.hash}. Nothing was lost either way.`
+                : `${result.cur.syncedBy ?? "someone"} changed this since you read it, and the version you started from is no longer in history so the difference cannot be shown. read_code it again, merge their changes into yours, then sync with baseHash ${result.cur.hash}.`,
           });
           continue;
         }

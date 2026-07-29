@@ -13,6 +13,7 @@ import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
 import { diffHunks, type Hunk } from "../diff";
+import { validateEdits, applyEdits, stillApplies, looksApplied, renderEdits, MAX_EDITS, type Edit } from "../suggest";
 
 // What a teammate changed under you while you were editing, in the form you can
 // act on: the exact text that was there and the exact text that replaced it.
@@ -1060,6 +1061,263 @@ export const tools: Tool[] = [
         data: { action: "restore_code", actor, target: projectId, detail: `${path} -> ${version.hash.slice(0, 12)}` },
       });
       return { path, restoredHash: version.hash, size: version.size, by: actor, replacedHash: existing?.hash ?? null };
+    },
+  },
+
+  // ---- Suggested changes: the route for people who cannot write the code ----
+  //
+  // Replica mode makes the mirror read-only, which is right — nothing should
+  // live in a copy of git that git does not have. But that leaves an obvious
+  // question: where does a change GO when the person proposing it has no push
+  // access, or should not be pushing unreviewed?
+  //
+  // Here. The vault holds the proposal and never touches git; the project owner
+  // is the bridge. Their agent applies the approved edits to the real checkout
+  // and pushes, and CI mirrors the result. No git credential is ever stored, no
+  // merge is ever performed by the vault, and nothing lands that a human did
+  // not approve on their own machine.
+  {
+    name: "suggest_change",
+    description:
+      "Propose a change to a file you cannot or should not write yourself — the route for a collaborator with no git access, or for any agent on a replica-mode project. Edits are content-anchored: give the EXACT text to replace and what to replace it with, not line numbers, because the file may move before anyone applies this. Each 'before' must appear exactly once in the file's current mirrored version; the server checks that and refuses otherwise, so a stale or ambiguous suggestion is caught now rather than misapplied later. The reason is required and becomes a linked note, so why this change happened outlives the review.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        path: { type: "string", description: "repo-relative path, as it appears in get_code_map" },
+        edits: {
+          type: "array",
+          description: "applied in order; a later 'before' may match text an earlier edit produced",
+          items: {
+            type: "object",
+            properties: {
+              before: { type: "string", description: "exact existing text, with enough surrounding lines to be unique" },
+              after: { type: "string", description: "what it becomes ('' to delete)" },
+            },
+            required: ["before", "after"],
+          },
+        },
+        reason: { type: "string", description: "why this change is needed — required, and kept as a note" },
+        title: { type: "string", description: "short label for the review queue" },
+        actor: { type: "string", description: "who is proposing (ignored when authenticated)" },
+      },
+      required: ["projectId", "path", "edits", "reason"],
+    },
+    handler: async (a, ctx) => {
+      const { projectId, path: rawPath, edits, reason, title } = a as {
+        projectId: string;
+        path: string;
+        edits: Edit[];
+        reason: string;
+        title?: string;
+      };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true, repoUrl: true } });
+      if (!project) throw new Error("project not found (use list_projects)");
+      if (!Array.isArray(edits) || !edits.length) throw new Error("edits must be a non-empty array of { before, after }");
+      if (edits.length > MAX_EDITS) throw new Error(`at most ${MAX_EDITS} edits per suggestion; split it up`);
+      if (typeof reason !== "string" || reason.trim().length < 10) {
+        throw new Error("reason is required and must actually explain the change — it becomes the note that outlives this review");
+      }
+      const path = normalizeRepoPath(rawPath);
+      if (!isValidRepoPath(path)) throw new Error("invalid repo path");
+
+      const rows = await prisma.codeFile.findMany({ where: { projectId, path }, orderBy: { part: "asc" } });
+      if (!rows.length) {
+        throw new Error(`'${path}' is not in the code mirror, so there is nothing to anchor a change against. get_code_map to see what is.`);
+      }
+      const content = rows.map((r) => r.content).join("");
+      const { checks, ok } = validateEdits(content, edits);
+      if (!ok) {
+        const bad = checks.filter((c) => !c.ok).map((c) => `edit ${c.index + 1}: ${c.reason}`);
+        throw new Error(`these edits do not match the file as it stands:\n${bad.join("\n")}`);
+      }
+
+      // The reason becomes a real note, linked to the project's knowledge graph.
+      // A pull-request description dies with the pull request; this is the part
+      // that is still answerable in a year when someone asks why the code looks
+      // like this.
+      const note = await prisma.item.create({
+        data: {
+          projectId,
+          type: "decision",
+          source: "mcp",
+          title: `Proposed: ${title?.trim() || path}`,
+          body: `**Suggested by:** ${actor} · **file:** \`${path}\`\n\n${reason.trim()}\n\n---\n\n${renderEdits(path, edits)}`,
+          metadata: JSON.stringify({ actor, via: "mcp", kind: "code_suggestion", path }),
+          createdBy: actor,
+          updatedBy: actor,
+        },
+        select: { id: true },
+      });
+
+      const suggestion = await prisma.codeSuggestion.create({
+        data: {
+          projectId,
+          path,
+          edits: JSON.stringify(edits),
+          reason: reason.trim(),
+          title: title?.trim() || null,
+          baseHash: rows[0].hash,
+          baseRef: rows[0].ref,
+          suggestedBy: actor,
+          noteItemId: note.id,
+        },
+        select: { id: true, status: true, createdAt: true },
+      });
+      await prisma.auditEvent.create({
+        data: { action: "suggest_change", actor, target: projectId, detail: `${path}: ${title?.trim() || reason.trim().slice(0, 120)}` },
+      });
+      return {
+        suggestionId: suggestion.id,
+        status: suggestion.status,
+        path,
+        edits: edits.length,
+        noteItemId: note.id,
+        by: actor,
+        note: `Recorded against ${rows[0].ref ?? "the current mirror"}. An owner or executive reviews it with review_suggestion; nothing changes in the mirror or in git until they do${project.repoUrl ? `. If you have write access to ${project.repoUrl}, a pull request there is still the better route` : ""}.`,
+      };
+    },
+  },
+  {
+    name: "list_suggestions",
+    description:
+      "Proposed code changes for a project, newest first. Staleness is recomputed against the mirror on every read, never cached: a suggestion whose anchor text has since changed is reported as no longer applying, rather than looking fine until someone tries it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        status: { type: "string", enum: ["open", "approved", "rejected", "applied", "withdrawn"] },
+      },
+      required: ["projectId"],
+    },
+    handler: async (a) => {
+      const { projectId, status } = a as { projectId: string; status?: string };
+      const rows = await prisma.codeSuggestion.findMany({
+        where: { projectId, ...(status ? { status } : {}) },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      });
+      const suggestions = [];
+      for (const s of rows) {
+        const parts = await prisma.codeFile.findMany({ where: { projectId, path: s.path }, orderBy: { part: "asc" } });
+        const content = parts.map((p) => p.content).join("");
+        const edits = JSON.parse(s.edits) as Edit[];
+        const applied = parts.length ? looksApplied(content, edits) : false;
+        suggestions.push({
+          suggestionId: s.id,
+          path: s.path,
+          title: s.title,
+          reason: s.reason,
+          status: applied && s.status !== "applied" ? "applied" : s.status,
+          suggestedBy: s.suggestedBy,
+          reviewedBy: s.reviewedBy,
+          reviewNote: s.reviewNote,
+          editCount: edits.length,
+          noteItemId: s.noteItemId,
+          createdAt: s.createdAt,
+          stillApplies: parts.length ? stillApplies(content, edits) : false,
+          ...(applied ? { detectedInMirror: true } : {}),
+        });
+      }
+      return {
+        suggestions,
+        open: suggestions.filter((s) => s.status === "open").length,
+        hint: "get_suggestion for the exact edits; review_suggestion to approve or reject (owner/executive).",
+      };
+    },
+  },
+  {
+    name: "get_suggestion",
+    description:
+      "One proposed change in full: the exact before/after edits, the reason, who proposed it, and whether it still applies to the file as it stands now. Approved suggestions also return the resulting file content, so the owner's agent can apply it to the real checkout without re-deriving anything.",
+    inputSchema: {
+      type: "object",
+      properties: { suggestionId: { type: "string" }, withResult: { type: "boolean", description: "include the full resulting file content" } },
+      required: ["suggestionId"],
+    },
+    handler: async (a) => {
+      const { suggestionId, withResult } = a as { suggestionId: string; withResult?: boolean };
+      const s = await prisma.codeSuggestion.findUnique({ where: { id: suggestionId } });
+      if (!s) throw new Error("suggestion not found");
+      const parts = await prisma.codeFile.findMany({ where: { projectId: s.projectId, path: s.path }, orderBy: { part: "asc" } });
+      const content = parts.map((p) => p.content).join("");
+      const edits = JSON.parse(s.edits) as Edit[];
+      const check = parts.length ? validateEdits(content, edits) : { ok: false, checks: [] };
+      const project = await prisma.project.findUnique({ where: { id: s.projectId }, select: { repoUrl: true } });
+      return {
+        suggestionId: s.id,
+        projectId: s.projectId,
+        path: s.path,
+        title: s.title,
+        reason: s.reason,
+        edits,
+        status: s.status,
+        suggestedBy: s.suggestedBy,
+        reviewedBy: s.reviewedBy,
+        reviewNote: s.reviewNote,
+        noteItemId: s.noteItemId,
+        proposedAgainst: s.baseRef ?? s.baseHash,
+        stillApplies: check.ok,
+        ...(check.ok ? {} : { blockers: check.checks.filter((c) => !c.ok) }),
+        ...(check.ok && withResult && s.status === "approved" ? { resultingContent: applyEdits(content, edits) } : {}),
+        hint: check.ok
+          ? s.status === "approved"
+            ? `Approved. Apply these edits to your real checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push — CI mirrors the result. The vault does not write to git.`
+            : "Not yet reviewed. review_suggestion approves or rejects it (owner/executive)."
+          : "This no longer fits the current file — the code it anchors to has changed. Ask the author to re-read the file and re-propose.",
+      };
+    },
+  },
+  {
+    name: "review_suggestion",
+    description:
+      "Owner/executive only: approve or reject a proposed code change. Approving does NOT modify the mirror or push anything — the vault never writes to git. It marks the change accepted and hands you the edits to apply in your own checkout, which is what makes this safe without storing a git credential.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        suggestionId: { type: "string" },
+        verdict: { type: "string", enum: ["approve", "reject"] },
+        note: { type: "string", description: "required when rejecting — say what would make it acceptable" },
+      },
+      required: ["suggestionId", "verdict"],
+    },
+    handler: async (a, ctx) => {
+      const { suggestionId, verdict, note } = a as { suggestionId: string; verdict: string; note?: string };
+      const approver = requireApprover(ctx);
+      const s = await prisma.codeSuggestion.findUnique({ where: { id: suggestionId } });
+      if (!s) throw new Error("suggestion not found");
+      if (s.status !== "open") throw new Error(`this suggestion is already ${s.status}`);
+      if (verdict === "reject" && !note?.trim()) {
+        throw new Error("rejecting needs a note — the author cannot act on a bare no");
+      }
+      const parts = await prisma.codeFile.findMany({ where: { projectId: s.projectId, path: s.path }, orderBy: { part: "asc" } });
+      const content = parts.map((p) => p.content).join("");
+      const edits = JSON.parse(s.edits) as Edit[];
+      if (verdict === "approve" && !(parts.length && stillApplies(content, edits))) {
+        throw new Error("this no longer fits the current file — the code it anchors to has changed since it was proposed. Ask the author to re-propose against the current version.");
+      }
+      const updated = await prisma.codeSuggestion.update({
+        where: { id: suggestionId },
+        data: {
+          status: verdict === "approve" ? "approved" : "rejected",
+          reviewedBy: approver.username,
+          reviewNote: note?.trim() || null,
+        },
+        select: { id: true, status: true, path: true },
+      });
+      await prisma.auditEvent.create({
+        data: { action: `suggestion_${verdict}`, actor: approver.username, target: s.projectId, detail: `${s.path} (${suggestionId})` },
+      });
+      const project = await prisma.project.findUnique({ where: { id: s.projectId }, select: { repoUrl: true } });
+      return {
+        ...updated,
+        reviewedBy: approver.username,
+        next:
+          verdict === "approve"
+            ? `get_suggestion { suggestionId: "${suggestionId}", withResult: true } gives you the resulting file. Apply it to your checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push; CI mirrors it and this closes itself.`
+            : `${s.suggestedBy} can revise and propose again.`,
+      };
     },
   },
   {

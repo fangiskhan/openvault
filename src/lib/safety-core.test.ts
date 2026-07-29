@@ -288,6 +288,117 @@ describe("code mirror: concurrent writes and recoverability", () => {
     expect(c.hint).toMatch(/before\/after snippets/);
   });
 
+  it("lets someone with no write access propose a change, and the owner approve it", async () => {
+    const p = await newProject("sugg1");
+    const path = "services/ai_service.py";
+    const original = [
+      "def get_llm_response(messages_context, image_input):",
+      "    if image_input:",
+      "        model_to_use = getattr(constants, 'VISION_MODEL')",
+      "    return call(model_to_use)",
+    ].join("\n");
+    await sync({ projectId: p.id, files: [{ path, content: original }] });
+    // Replica mode: nobody may write the mirror. The suggestion route must
+    // still work, because that is the entire point of it.
+    // set_mirror_mode verifies the writer is a real, approved account.
+    const ciAcct = await accounts.registerAccount("mirror-ci");
+    await accounts.approveAccount(ciAcct.account.id, await accounts.getOrCreateOwner());
+    await toolMap.get("set_mirror_mode")!.handler(
+      { projectId: p.id, mode: "replica", writer: "mirror-ci" },
+      ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" }),
+    );
+
+    const suggest = toolMap.get("suggest_change")!;
+    const edits = [
+      {
+        before: "        model_to_use = getattr(constants, 'VISION_MODEL')",
+        after: '        # FORCE gpt-4o for images, ignoring config to prevent crashes\n        model_to_use = "gpt-4o"',
+      },
+    ];
+    const made = (await suggest.handler(
+      { projectId: p.id, path, edits, reason: "The configured vision model crashes on image input; pin the one that works.", title: "Pin gpt-4o for images" },
+      ctxOf(bob),
+    )) as { suggestionId: string; noteItemId: string };
+    expect(made.suggestionId).toBeTruthy();
+
+    // The reason became a real, searchable note — not a review comment that dies.
+    const note = await prisma.item.findUnique({ where: { id: made.noteItemId } });
+    expect(note?.body).toContain("crashes on image input");
+    expect(note?.createdBy).toBe("bob-dev");
+
+    // A member cannot approve their own suggestion.
+    const review = toolMap.get("review_suggestion")!;
+    await expect(review.handler({ suggestionId: made.suggestionId, verdict: "approve" }, ctxOf(bob))).rejects.toThrow(/owner\/executive/);
+    await expect(review.handler({ suggestionId: made.suggestionId, verdict: "reject" }, ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" }))).rejects.toThrow(/note/);
+
+    const verdict = (await review.handler(
+      { suggestionId: made.suggestionId, verdict: "approve" },
+      ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" }),
+    )) as { status: string; reviewedBy: string };
+    expect(verdict.status).toBe("approved");
+    expect(verdict.reviewedBy).toBe("boss");
+
+    // Approval hands the owner the resulting file — it does NOT touch the mirror.
+    const full = (await toolMap.get("get_suggestion")!.handler({ suggestionId: made.suggestionId, withResult: true })) as {
+      stillApplies: boolean;
+      resultingContent?: string;
+    };
+    expect(full.stillApplies).toBe(true);
+    expect(full.resultingContent).toContain('model_to_use = "gpt-4o"');
+    expect((await readCode(p.id, path)).content).toBe(original); // mirror untouched
+  });
+
+  it("refuses a suggestion whose anchor text has since changed", async () => {
+    const p = await newProject("sugg2");
+    const path = "src/config.ts";
+    await sync({ projectId: p.id, files: [{ path, content: "export const RETRIES = 1;\nexport const TIMEOUT = 30;" }] });
+    const before = await readCode(p.id, path);
+
+    const made = (await toolMap.get("suggest_change")!.handler(
+      {
+        projectId: p.id,
+        path,
+        edits: [{ before: "export const RETRIES = 1;", after: "export const RETRIES = 5;" }],
+        reason: "One retry is not enough for the flaky upstream API.",
+      },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+
+    // Someone else changes that exact line before anyone reviews it.
+    await sync(
+      { projectId: p.id, files: [{ path, content: "export const RETRIES = 3;\nexport const TIMEOUT = 30;", baseHash: before.hash }] },
+      alice,
+    );
+
+    const listed = (await toolMap.get("list_suggestions")!.handler({ projectId: p.id })) as {
+      suggestions: Array<{ stillApplies: boolean }>;
+    };
+    expect(listed.suggestions[0].stillApplies).toBe(false);
+
+    await expect(
+      toolMap.get("review_suggestion")!.handler(
+        { suggestionId: made.suggestionId, verdict: "approve" },
+        ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" }),
+      ),
+    ).rejects.toThrow(/no longer fits/);
+  });
+
+  it("refuses an ambiguous anchor at proposal time rather than misapplying it later", async () => {
+    const p = await newProject("sugg3");
+    await sync({ projectId: p.id, files: [{ path: "src/dup.ts", content: "let x = 1;\nlet y = 2;\nlet x = 1;" }] });
+    await expect(
+      toolMap.get("suggest_change")!.handler(
+        {
+          projectId: p.id,
+          path: "src/dup.ts",
+          edits: [{ before: "let x = 1;", after: "let x = 9;" }],
+          reason: "This constant should be nine for reasons explained here.",
+        },
+        ctxOf(bob),
+      ),
+    ).rejects.toThrow(/occurs 2 times/);
+  });
+
   it("keeps the previous version recoverable after a manifest prune", async () => {
     const p = await newProject("cas4");
     await sync({ projectId: p.id, files: [{ path: "src/keep.ts", content: "kept" }] });

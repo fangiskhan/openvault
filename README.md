@@ -8,7 +8,7 @@ A live instance runs at [openvault-hub.vercel.app](https://openvault-hub.vercel.
 
 Notes, tasks, risks, meeting minutes and spreadsheets live inside projects. Connect two projects and wikilinks, search and the graph cross the boundary. Each project also carries a code mirror and a work board, so agents read current code and see each other's in-flight changes without pulling GitHub. Run it on your own machine, your own server, or Vercel. Your data stays where you put it.
 
-Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 31 MCP tools for reading and writing state, code, and coordination. 56 automated tests cover the rules engine, the similarity engine, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
+Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 42 MCP tools for reading and writing state, code, and coordination. 105 automated tests cover the rules engine, the similarity engine, the code mirror's concurrency and recoverability, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
 
 ## Who uses it
 
@@ -26,7 +26,8 @@ Working v1: projects, status, cited briefings, multi-user accounts with roles an
 - Excel and CSV upload, parsed into searchable tables
 - A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status
 - A one-screen briefing built from real items; each line links to its source
-- 31 MCP tools (table below)
+- 42 MCP tools (table below)
+- **Suggested changes** — the route for someone who can't write the code: a collaborator with no git access, or any agent on a replica-mode mirror. They propose content-anchored edits ("replace this exact text with that") plus a required reason; the server verifies each anchor occurs exactly once in the current file, so a stale or ambiguous suggestion is refused at proposal time rather than misapplied later. An owner approves, and gets the resulting file to apply in their own checkout. **The vault never writes to git** — no stored credential, no merge engine, nothing lands that a human didn't approve on their own machine. The reason becomes a linked note, so why a change happened outlives the review that a pull-request description would have taken with it.
 - Bulk ingestion: your agent splits a transcript, doc, or export into atomic notes (the downloadable vault-ingest skill teaches it how) and calls `import_notes`; the server builds the Map-of-Content, cross-links, and graph
 - Inferred connections: the Related rail and `suggest_links` surface notes that share content but were never linked; `find_project_bridges` proposes candidate project pairs; the graph groups notes into topic clusters. Every suggestion ships with the terms behind it, because the matching is lexical rather than semantic — two unrelated projects that both hit the same library error will score, and the evidence is how you tell that apart from real overlap in seconds.
 - A code mirror and work board per project, with conflict warnings before two agents touch the same file

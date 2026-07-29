@@ -25,6 +25,9 @@ model Project {
   healthSetAt DateTime?
   ownerAccountId String? // account that owns/maintains this project (routing + find_mcp)
   mcpUrl         String? // this project's own MCP endpoint, if it exposes one
+  repoUrl        String? // where the real code lives, e.g. https://github.com/x/y —
+  // so a refusal can name the repo to open a PR against instead of saying
+  // "open a PR" to someone with no way to know where.
   // How the code mirror is written.
   //   "workspace" — anyone approved may sync_code. Correct for projects with no
   //                 git remote, and the only mode that existed at first.
@@ -38,11 +41,12 @@ model Project {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  items         Item[]
-  files         FileAsset[]
-  codeFiles     CodeFile[]
-  codeVersions  CodeVersion[]
-  workIntents   WorkIntent[]
+  items            Item[]
+  files            FileAsset[]
+  codeFiles        CodeFile[]
+  codeVersions     CodeVersion[]
+  codeSuggestions  CodeSuggestion[]
+  workIntents      WorkIntent[]
   skills        ProjectSkill[]
   relationsFrom ProjectRelation[] @relation("fromProject")
   relationsTo   ProjectRelation[] @relation("toProject")
@@ -116,6 +120,41 @@ model CodeVersion {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId, path, createdAt])
+}
+
+// A proposed change to code, from someone who cannot (or should not) write it
+// themselves. This is the answer to the question replica mode raises: if the
+// mirror is a read-only copy of git, where does an agent's change GO?
+//
+// It goes here. The vault never writes to git — the project owner is the
+// bridge. An agent proposes, the owner reviews, the owner's agent applies the
+// edits to the real checkout, and CI mirrors the result on merge. No stored
+// git credential, no merge engine, and nothing lands that a human did not
+// approve on their own machine.
+//
+// Edits are content-anchored ("this text becomes that text"), never line
+// numbers: a suggestion may sit for days while the file moves underneath it,
+// and a stale coordinate still resolves — silently, to the wrong code.
+model CodeSuggestion {
+  id         String  @id @default(cuid())
+  projectId  String
+  path       String
+  edits      String // JSON: [{ before, after }], applied in order
+  reason     String // why — required, and mirrored into a linked note
+  title      String?
+  baseHash   String? // mirror content hash the edits were verified against
+  baseRef    String?
+  status     String  @default("open") // open | approved | rejected | applied | withdrawn
+  suggestedBy String
+  reviewedBy String?
+  reviewNote String?
+  noteItemId String? // the Item carrying the reason into the knowledge graph
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
 }
 
 // An agent's declared unit of work: "I am changing these files to do X".

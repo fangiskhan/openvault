@@ -162,3 +162,131 @@ describe("review gate", () => {
     expect(second.overlapping[0].overlap).toEqual(["src/auth.ts"]);
   });
 });
+
+// The mirror holds ONE version per path and has no merge algorithm, so every
+// guarantee it offers rests on refusing an ambiguous write and on never
+// destroying content without archiving it first. None of that was covered.
+describe("code mirror: concurrent writes and recoverability", () => {
+  type SyncResult = {
+    synced: number;
+    deleted: number;
+    pruned: number;
+    conflicts: Array<{ path: string; currentHash: string | null; hint: string }>;
+    overwrote: Array<{ path: string }>;
+    skipped: Array<{ path: string; reason: string }>;
+  };
+  const alice = { id: "sa", username: "alice-dev", role: "member", status: "approved" };
+  const bob = { id: "sb", username: "bob-dev", role: "member", status: "approved" };
+
+  const newProject = (n: string) => prisma.project.create({ data: { name: n, slug: `${n}-${Date.now()}` } });
+  const sync = (args: Record<string, unknown>, who = alice) =>
+    toolMap.get("sync_code")!.handler(args, ctxOf(who)) as Promise<SyncResult>;
+  const readCode = (projectId: string, path: string) =>
+    toolMap.get("read_code")!.handler({ projectId, path }) as Promise<{ content: string; hash: string }>;
+
+  // A file long enough for "line 50" and "line 150" to be genuinely far apart.
+  const lines = (edits: Record<number, string> = {}) =>
+    Array.from({ length: 200 }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).join("\n");
+
+  it("refuses to replace a mirrored file when no baseHash is sent", async () => {
+    const p = await newProject("cas1");
+    await sync({ projectId: p.id, files: [{ path: "src/a.ts", content: "v1" }] });
+
+    const second = await sync({ projectId: p.id, files: [{ path: "src/a.ts", content: "v2" }] }, bob);
+    expect(second.synced).toBe(0);
+    expect(second.conflicts).toHaveLength(1);
+    expect(second.conflicts[0].hint).toMatch(/no baseHash/);
+
+    // Refused means refused: the slot still holds v1.
+    expect((await readCode(p.id, "src/a.ts")).content).toBe("v1");
+  });
+
+  it("accepts the current baseHash, refuses a stale one, and force overrides", async () => {
+    const p = await newProject("cas2");
+    await sync({ projectId: p.id, files: [{ path: "src/b.ts", content: "v1" }] });
+    const v1 = await readCode(p.id, "src/b.ts");
+
+    const ok = await sync({ projectId: p.id, files: [{ path: "src/b.ts", content: "v2", baseHash: v1.hash }] });
+    expect(ok.synced).toBe(1);
+    expect(ok.overwrote).toHaveLength(1);
+
+    // v1.hash is now stale — someone (us) moved the slot to v2.
+    const stale = await sync({ projectId: p.id, files: [{ path: "src/b.ts", content: "v3", baseHash: v1.hash }] }, bob);
+    expect(stale.synced).toBe(0);
+    expect(stale.conflicts[0].hint).toMatch(/changed this since you read it/);
+
+    const forced = await sync({ projectId: p.id, files: [{ path: "src/b.ts", content: "v3" }], force: true }, bob);
+    expect(forced.synced).toBe(1);
+    expect((await readCode(p.id, "src/b.ts")).content).toBe("v3");
+  });
+
+  it("the line-50 / line-150 case: the later push cannot revert the earlier one", async () => {
+    const p = await newProject("cas3");
+    const path = "src/app.ts";
+    await sync({ projectId: p.id, files: [{ path, content: lines() }] });
+
+    // Both read the same starting version.
+    const start = await readCode(p.id, path);
+
+    // Alice edits line 50 and lands first.
+    const aliceEdit = await sync(
+      { projectId: p.id, files: [{ path, content: lines({ 50: "line 50 — ALICE" }), baseHash: start.hash }] },
+      alice,
+    );
+    expect(aliceEdit.synced).toBe(1);
+
+    // Bob edits line 150 in the copy he read at the start, so his file still
+    // carries the ORIGINAL line 50. Sending it whole would revert Alice.
+    const bobEdit = await sync(
+      { projectId: p.id, files: [{ path, content: lines({ 150: "line 150 — BOB" }), baseHash: start.hash }] },
+      bob,
+    );
+    expect(bobEdit.synced).toBe(0);
+    expect(bobEdit.conflicts).toHaveLength(1);
+
+    const after = (await readCode(p.id, path)).content.split("\n");
+    expect(after[49]).toBe("line 50 — ALICE"); // survived
+    expect(after[149]).toBe("line 150"); // Bob's change was refused, not half-applied
+  });
+
+  it("keeps the previous version recoverable after a manifest prune", async () => {
+    const p = await newProject("cas4");
+    await sync({ projectId: p.id, files: [{ path: "src/keep.ts", content: "kept" }] });
+    await sync({ projectId: p.id, files: [{ path: "src/only-in-mirror.ts", content: "written only here" }] });
+
+    // A whole-tree sync whose manifest omits the mirror-only file: exactly what
+    // CI sends after an unrelated push. This used to destroy it outright.
+    const pruneRun = await sync({
+      projectId: p.id,
+      ref: "main @ abc123",
+      files: [],
+      manifest: ["src/keep.ts"],
+      force: true,
+    });
+    expect(pruneRun.pruned).toBe(1);
+
+    const history = (await toolMap.get("get_code_history")!.handler({
+      projectId: p.id,
+      path: "src/only-in-mirror.ts",
+    })) as { current: unknown; versionCount: number; versions: Array<{ preview: string }> };
+    expect(history.current).toBeFalsy(); // gone from the mirror
+    expect(history.versionCount).toBe(1);
+    expect(history.versions[0].preview).toBe("written only here"); // but recoverable
+  });
+
+  it("archives explicit deletes too, and reports an invalid delete path", async () => {
+    const p = await newProject("cas5");
+    await sync({ projectId: p.id, files: [{ path: "src/doomed.ts", content: "bye" }] });
+
+    const run = await sync({ projectId: p.id, files: [], deletes: ["src/doomed.ts", "../escape.ts"] });
+    expect(run.deleted).toBe(1);
+    expect(run.skipped.some((s) => s.reason.includes("invalid repo path"))).toBe(true);
+
+    const history = (await toolMap.get("get_code_history")!.handler({
+      projectId: p.id,
+      path: "src/doomed.ts",
+    })) as { versionCount: number; versions: Array<{ preview: string }> };
+    expect(history.versionCount).toBe(1);
+    expect(history.versions[0].preview).toBe("bye");
+  });
+});

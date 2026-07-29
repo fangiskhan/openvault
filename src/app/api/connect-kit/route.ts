@@ -402,7 +402,10 @@ if (cur.length) batches.push(cur);
 
 let synced = 0;
 for (let i = 0; i < batches.length; i++) {
-  const r = await call("sync_code", { projectId: PROJECT, ref, files: batches[i], actor: "ci" });
+  // force: this is the replica's sole writer and git is the source of truth,
+  // so replacing whatever the mirror holds is the entire point. Every other
+  // caller must send baseHash instead; only CI gets to say "git wins".
+  const r = await call("sync_code", { projectId: PROJECT, ref, files: batches[i], actor: "ci", force: true });
   synced += r.synced ?? 0;
   console.log("batch " + (i + 1) + "/" + batches.length + ": " + (r.synced ?? 0) + " file(s)");
 }

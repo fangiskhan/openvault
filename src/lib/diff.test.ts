@@ -45,6 +45,25 @@ describe("diffHunks", () => {
     expect(all).toContain("line 150 — CHANGED");
   });
 
+  it("gives snippets for a one-line change in a SHORT file", () => {
+    // Regression: a modified line is one removal plus one addition, and summing
+    // those double-counted every edit. A single change to a three-line file
+    // scored 2/3, tripped the rewrite threshold, and the snippet was discarded.
+    // Every local test used 200-line fixtures, so only a production check found
+    // it. Short files are the common case for config and constants.
+    const before = "export const A = 1;\nexport const B = 2;\nexport const C = 3;";
+    const d = diffHunks(before, before.replace("B = 2", "B = 22"));
+    expect(d.kind).toBe("hunks");
+    if (d.kind !== "hunks") return;
+    expect(d.hunks[0].before).toContain("export const B = 2;");
+    expect(d.hunks[0].after).toContain("export const B = 22;");
+  });
+
+  it("does not call a two-line file rewritten just because both lines moved", () => {
+    const d = diffHunks("alpha\nbeta", "gamma\ndelta");
+    expect(d.kind).toBe("hunks");
+  });
+
   it("calls a wholesale rewrite a rewrite instead of emitting thousands of hunks", () => {
     const before = lines();
     const after = Array.from({ length: 200 }, (_, i) => `totally different ${i}`).join("\n");

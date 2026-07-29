@@ -15,6 +15,11 @@ const MAX_LCS_LINES = 1200; // past this, report coarsely rather than slowly
 const MAX_HUNKS = 10;
 const MAX_HUNK_LINES = 40;
 const REWRITE_FRACTION = 0.6;
+// Below this, never summarise as "rewritten" — a short file's full diff is
+// cheap, and the fraction is meaningless at small n: editing one line of a
+// three-line file is 33% of it, which says nothing about whether a reader
+// wants the detail. Without this floor, small files never got the snippets.
+const MIN_REWRITE_LINES = 30;
 const CONTEXT = 2;
 
 export type Hunk = { before: string; after: string };
@@ -95,10 +100,14 @@ export function diffHunks(beforeText: string, afterText: string): DiffResult {
   // difference. Two one-line edits at opposite ends of a file span almost the
   // whole file while changing two lines; judging by the span called that a
   // rewrite and threw the detail away.
-  const changedLines = midA.length - pairs.length + (midB.length - pairs.length);
+  //
+  // max(), not sum(): a MODIFIED line is one removed plus one added, and adding
+  // those double-counts every edit. That made a single-line change to a
+  // three-line file score 2/3 and get summarised away as a rewrite.
+  const changedLines = Math.max(midA.length - pairs.length, midB.length - pairs.length);
   // A reformat, a line-ending flip or a generated artifact rewrites nearly
   // everything. Emitting thousands of hunks for that is noise, not information.
-  if (total > 0 && changedLines / total > REWRITE_FRACTION) {
+  if (total >= MIN_REWRITE_LINES && changedLines / total > REWRITE_FRACTION) {
     return { kind: "rewritten", changedLines, totalLines: total };
   }
 

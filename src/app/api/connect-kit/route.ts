@@ -197,7 +197,10 @@ YOUR job is the judgment: splitting raw content into good notes.
 # Setup:
 #   1. Create a CI account in OpenVault (Accounts -> Add a member, e.g. "ci"),
 #      approve it, and copy its one-time ovk_ token.
-#   2. Add that token as a repository secret named OPENVAULT_TOKEN.
+#   2. Add that token as a repository secret named OPENVAULT_TOKEN:
+#        gh secret set OPENVAULT_TOKEN --body "ovk_..."
+#      Use --body, not a pipe: piping on Windows PowerShell writes a UTF-8 BOM
+#      into the secret, and the run then fails on a header-encoding error.
 #   3. Have an owner run set_mirror_mode { projectId, mode: "replica",
 #      writer: "ci" } so nothing but this workflow can write the mirror.
 #   4. Commit this file to .github/workflows/openvault-sync.yml
@@ -252,9 +255,14 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-const VAULT = process.env.OPENVAULT_URL;
-const PROJECT = process.env.OPENVAULT_PROJECT;
-const TOKEN = process.env.OPENVAULT_TOKEN;
+// Strip a BOM and surrounding whitespace. Setting a secret by piping a string
+// on Windows PowerShell prepends U+FEFF, which makes the Authorization header
+// throw "Cannot convert argument to a ByteString" — an error that names an
+// index in an internal string and says nothing about the real cause.
+const clean = (v) => (v ?? "").replace(/^\\uFEFF/, "").trim();
+const VAULT = clean(process.env.OPENVAULT_URL);
+const PROJECT = clean(process.env.OPENVAULT_PROJECT);
+const TOKEN = clean(process.env.OPENVAULT_TOKEN);
 if (!VAULT || !PROJECT || !TOKEN) {
   console.error("Missing OPENVAULT_URL / OPENVAULT_PROJECT / OPENVAULT_TOKEN");
   process.exit(1);

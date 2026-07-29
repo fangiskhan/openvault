@@ -8,9 +8,14 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-const VAULT = process.env.OPENVAULT_URL;
-const PROJECT = process.env.OPENVAULT_PROJECT;
-const TOKEN = process.env.OPENVAULT_TOKEN;
+// Strip a BOM and surrounding whitespace. Setting a secret by piping a string
+// on Windows PowerShell prepends U+FEFF, which makes the Authorization header
+// throw "Cannot convert argument to a ByteString" — an error that names an
+// index in an internal string and says nothing about the real cause.
+const clean = (v) => (v ?? "").replace(/^﻿/, "").trim();
+const VAULT = clean(process.env.OPENVAULT_URL);
+const PROJECT = clean(process.env.OPENVAULT_PROJECT);
+const TOKEN = clean(process.env.OPENVAULT_TOKEN);
 if (!VAULT || !PROJECT || !TOKEN) {
   console.error("Missing OPENVAULT_URL / OPENVAULT_PROJECT / OPENVAULT_TOKEN");
   process.exit(1);

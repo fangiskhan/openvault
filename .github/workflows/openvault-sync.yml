@@ -1,0 +1,36 @@
+# Keeps this repo's OpenVault code mirror equal to main.
+#
+# A local post-commit hook only fires on the machine that made the commit, and
+# only for that person's commits, so the mirror drifts into a mix of refs that
+# never existed together. This runs once per push, from one authority, over the
+# whole tree — so the mirror is always exactly one commit.
+#
+# The mirror is in replica mode: only the `ci` account may write it. Change code
+# through a pull request; the mirror follows on merge.
+name: Sync code mirror to OpenVault
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Two pushes must never interleave batches — that is how a mirror ends up
+  # holding half of one commit and half of another.
+  group: openvault-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Push tree to OpenVault
+        env:
+          OPENVAULT_URL: https://openvault-hub.vercel.app
+          OPENVAULT_PROJECT: cms5bs1zy0000l7047mxueapq
+          OPENVAULT_TOKEN: ${{ secrets.OPENVAULT_TOKEN }}
+        run: node .github/workflows/openvault-sync.mjs

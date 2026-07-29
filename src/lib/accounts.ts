@@ -115,8 +115,11 @@ export async function approverFrom(req: Request) {
     // local human is the owner, same as before accounts existed.
     return getOrCreateOwner();
   }
-  const bearer = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-  const acc = await resolveByToken(bearer);
+  // resolveBearer, not resolveByToken: the shared MCP_TOKEN resolves to the
+  // owner there. Checking account tokens only meant that token could approve
+  // accounts over MCP but silently 403 over HTTP — the same credential with
+  // two different authorities depending on the door it came through.
+  const acc = await resolveBearer(req);
   if (acc && acc.status === "approved" && (acc.role === "owner" || acc.role === "executive")) return acc;
   return null;
 }

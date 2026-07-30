@@ -1143,7 +1143,12 @@ export const tools: Tool[] = [
         },
         actor: { type: "string", description: "who is proposing (ignored when authenticated)" },
       },
-      required: ["projectId", "path", "edits", "reason"],
+      // edits is NOT in required: a deletion proposal (deleteFile: true) has
+      // none, and the handler enforces edits-or-deleteFile itself. Handler
+      // tests call past the transport's required-args check, so a mistake here
+      // is invisible to them and only surfaces over real MCP — which is
+      // exactly how it was found.
+      required: ["projectId", "path", "reason"],
     },
     handler: async (a, ctx) => {
       const { projectId, path: rawPath, reason, title, deleteFile } = a as {

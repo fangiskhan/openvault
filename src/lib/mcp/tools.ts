@@ -13,7 +13,7 @@ import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
 import { diffHunks, type Hunk } from "../diff";
-import { validateEdits, applyEdits, suggestionState, isCreateEdits, renderEdits, MAX_EDITS, MAX_EDIT_CHARS, type Edit } from "../suggest";
+import { validateEdits, applyEdits, suggestionState, isCreateEdits, isDeleteEdits, createContent, DELETE_SENTINEL, renderEdits, MAX_EDITS, MAX_EDIT_CHARS, type Edit } from "../suggest";
 
 // What a teammate changed under you while you were editing, in the form you can
 // act on: the exact text that was there and the exact text that replaced it.
@@ -211,6 +211,37 @@ export const tools: Tool[] = [
       });
       if (!it) throw new Error("item not found");
       return it;
+    },
+  },
+  {
+    name: "delete_item",
+    description:
+      "Owner/executive only: permanently delete one item (note, task, risk). The retraction path that never existed — until now an agent could write a note but never take one back, which mattered most for the worst case: a secret or a wrong claim landing in a shared, searchable vault. Deletion is real (backlinks to the item become ghost links) and the audit trail records who removed what and why.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string" },
+        reason: { type: "string", description: "why it is being removed — recorded in the audit trail" },
+      },
+      required: ["itemId"],
+    },
+    handler: async (a, ctx) => {
+      const { itemId, reason } = a as { itemId: string; reason?: string };
+      const approver = requireApprover(ctx);
+      const it = await prisma.item.findUnique({ where: { id: itemId }, select: { id: true, projectId: true, title: true } });
+      if (!it) throw new Error("item not found");
+      await prisma.item.delete({ where: { id: itemId } });
+      // The audit row IS the retraction record: append-only, so "this existed
+      // and was removed by X because Y" survives the deletion itself.
+      await prisma.auditEvent.create({
+        data: {
+          action: "delete_item",
+          actor: approver.username,
+          target: it.projectId,
+          detail: `"${it.title}" (${itemId})${reason?.trim() ? ` — ${reason.trim().slice(0, 300)}` : ""}`,
+        },
+      });
+      return { deleted: true, itemId, title: it.title, projectId: it.projectId, by: approver.username };
     },
   },
   {
@@ -1087,15 +1118,21 @@ export const tools: Tool[] = [
         path: { type: "string", description: "repo-relative path, as it appears in get_code_map" },
         edits: {
           type: "array",
-          description: "applied in order; a later 'before' may match text an earlier edit produced",
+          description:
+            "applied in order; a later 'before' may match text an earlier edit produced. For a NEW file: every edit has before '' and the afters are concatenated — several parts let a file over the per-edit cap travel as one suggestion. Omit entirely with deleteFile: true.",
           items: {
             type: "object",
             properties: {
-              before: { type: "string", description: "exact existing text, with enough surrounding lines to be unique" },
-              after: { type: "string", description: "what it becomes ('' to delete)" },
+              before: { type: "string", description: "exact existing text, with enough surrounding lines to be unique ('' for new-file parts)" },
+              after: { type: "string", description: "what it becomes ('' to delete that text)" },
             },
             required: ["before", "after"],
           },
+        },
+        deleteFile: {
+          type: "boolean",
+          description:
+            "propose REMOVING this file entirely (no edits). Goes stale if the file changes before review, and closes itself once the file is gone from the mirror.",
         },
         reason: { type: "string", description: "why this change is needed — required, and kept as a note" },
         title: { type: "string", description: "short label for the review queue" },
@@ -1109,39 +1146,60 @@ export const tools: Tool[] = [
       required: ["projectId", "path", "edits", "reason"],
     },
     handler: async (a, ctx) => {
-      const { projectId, path: rawPath, edits, reason, title } = a as {
+      const { projectId, path: rawPath, reason, title, deleteFile } = a as {
         projectId: string;
         path: string;
-        edits: Edit[];
         reason: string;
         title?: string;
+        deleteFile?: boolean;
       };
       const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
       const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true, repoUrl: true } });
       if (!project) throw new Error("project not found (use list_projects)");
-      if (!Array.isArray(edits) || !edits.length) throw new Error("edits must be a non-empty array of { before, after }");
-      if (edits.length > MAX_EDITS) throw new Error(`at most ${MAX_EDITS} edits per suggestion; split it up`);
       if (typeof reason !== "string" || reason.trim().length < 10) {
         throw new Error("reason is required and must actually explain the change — it becomes the note that outlives this review");
       }
       const path = normalizeRepoPath(rawPath);
       if (!isValidRepoPath(path)) throw new Error("invalid repo path");
 
+      // Three change types, one tool: deleteFile is its own flag rather than a
+      // magic edit shape at the API surface; internally it is stored as the
+      // sentinel no other kind can produce.
+      const rawEdits = (a as { edits?: Edit[] }).edits;
+      let edits: Edit[];
+      if (deleteFile) {
+        if (Array.isArray(rawEdits) && rawEdits.length) throw new Error("deleteFile takes no edits — it proposes removing the whole file");
+        edits = DELETE_SENTINEL;
+      } else {
+        if (!Array.isArray(rawEdits) || !rawEdits.length) throw new Error("edits must be a non-empty array of { before, after } (or pass deleteFile: true)");
+        if (rawEdits.length > MAX_EDITS) throw new Error(`at most ${MAX_EDITS} edits per suggestion; split it up`);
+        edits = rawEdits;
+      }
+
       const rows = await prisma.codeFile.findMany({ where: { projectId, path }, orderBy: { part: "asc" } });
       const existingContent = rows.length ? rows.map((r) => r.content).join("") : null;
-      const creating = isCreateEdits(edits);
-      if (creating) {
-        // A NEW file: nothing to anchor on, so the one edit IS the file. An
-        // EMPTY mirrored file counts as absent here — a placeholder like
-        // __init__.py has no text an ordinary edit could anchor on, so without
-        // this it would be a dead end no proposal could ever grow.
+      const creating = !deleteFile && isCreateEdits(edits);
+      if (deleteFile) {
+        // Deleting needs a file to delete. The recorded hash is the staleness
+        // anchor: if the file changes before review, the proposer was looking
+        // at something other than what would now be removed.
+        if (existingContent === null) throw new Error(`'${path}' is not in the code mirror — nothing to propose deleting.`);
+      } else if (creating) {
+        // A NEW file: nothing to anchor on, so the edits ARE the file — afters
+        // concatenated in order, several parts when it exceeds the per-edit
+        // cap. An EMPTY mirrored file counts as absent here — a placeholder
+        // like __init__.py has no text an ordinary edit could anchor on, so
+        // without this it would be a dead end no proposal could ever grow.
         if (existingContent !== null && existingContent.trim()) {
           throw new Error(`'${path}' already exists in the mirror — propose anchored edits to it instead of a new file.`);
         }
-        if (edits[0].after.length > MAX_EDIT_CHARS) throw new Error(`a new-file proposal is capped at ${MAX_EDIT_CHARS} characters`);
+        const over = edits.findIndex((e) => e.after.length > MAX_EDIT_CHARS);
+        if (over !== -1) {
+          throw new Error(`part ${over + 1} exceeds ${MAX_EDIT_CHARS} characters — split the content into more parts (up to ${MAX_EDITS})`);
+        }
       } else if (existingContent === null) {
         throw new Error(
-          `'${path}' is not in the code mirror, so there is nothing to anchor a change against. get_code_map to see what is. To propose a NEW file, send exactly one edit with before: "" and the full content as after.`,
+          `'${path}' is not in the code mirror, so there is nothing to anchor a change against. get_code_map to see what is. To propose a NEW file, send edits with before: "" carrying the content; to propose removing a file, pass deleteFile: true.`,
         );
       } else {
         const { checks, ok } = validateEdits(existingContent, edits);
@@ -1166,7 +1224,7 @@ export const tools: Tool[] = [
           projectId,
           type: "decision",
           source: "mcp",
-          title: `Proposed: ${title?.trim() || path}`,
+          title: `Proposed: ${title?.trim() || (deleteFile ? `delete ${path}` : path)}`,
           body: `**Suggested by:** ${actor} · **file:** \`${path}\`\n\n${reason.trim()}\n\n---\n\n${renderEdits(path, edits)}`,
           metadata: JSON.stringify({ actor, via: "mcp", kind: "code_suggestion", path }),
           createdBy: actor,
@@ -1197,9 +1255,11 @@ export const tools: Tool[] = [
         status: suggestion.status,
         path,
         edits: edits.length,
+        ...(deleteFile ? { deletesFile: true } : {}),
+        ...(creating ? { createsFile: true } : {}),
         noteItemId: note.id,
         by: actor,
-        note: `Recorded ${creating ? "as a NEW file" : `against ${rows[0]?.ref ?? "the current mirror"}`}. An owner or executive reviews it with review_suggestion; nothing changes in the mirror or in git until they do${project.repoUrl ? `. If you have write access to ${project.repoUrl}, a pull request there is still the better route` : ""}.`,
+        note: `Recorded ${deleteFile ? "as a DELETION" : creating ? "as a NEW file" : `against ${rows[0]?.ref ?? "the current mirror"}`}. An owner or executive reviews it with review_suggestion; nothing changes in the mirror or in git until they do${project.repoUrl ? `. If you have write access to ${project.repoUrl}, a pull request there is still the better route` : ""}.`,
         ...(moved
           ? {
               warning: `the mirror moved past the version this working copy was based on (${expectedHash!.slice(0, 12)}… → ${rows[0]!.hash.slice(0, 12)}…). Your edits still anchor, but read_code the current file to confirm they compose with the newer changes before the owner reviews.`,
@@ -1232,7 +1292,7 @@ export const tools: Tool[] = [
         const parts = await prisma.codeFile.findMany({ where: { projectId, path: s.path }, orderBy: { part: "asc" } });
         const content = parts.map((p) => p.content).join("");
         const edits = JSON.parse(s.edits) as Edit[];
-        const st = suggestionState(parts.length ? content : null, edits);
+        const st = suggestionState(parts.length ? content : null, edits, s.baseHash);
         suggestions.push({
           suggestionId: s.id,
           path: s.path,
@@ -1247,6 +1307,7 @@ export const tools: Tool[] = [
           createdAt: s.createdAt,
           stillApplies: st.stillApplies,
           ...(st.kind === "create" ? { createsFile: true } : {}),
+          ...(st.kind === "delete" ? { deletesFile: true } : {}),
           ...(st.applied ? { detectedInMirror: true } : {}),
         });
       }
@@ -1273,16 +1334,28 @@ export const tools: Tool[] = [
       const parts = await prisma.codeFile.findMany({ where: { projectId: s.projectId, path: s.path }, orderBy: { part: "asc" } });
       const content = parts.map((p) => p.content).join("");
       const edits = JSON.parse(s.edits) as Edit[];
-      const st = suggestionState(parts.length ? content : null, edits);
+      const st = suggestionState(parts.length ? content : null, edits, s.baseHash);
       const blockers = st.stillApplies
         ? []
         : st.applied
-          ? [{ index: 0, ok: false, occurrences: 0, reason: "appears already applied — the mirror already holds the proposed result" }]
-          : st.kind === "create"
-            ? [{ index: 0, ok: false, occurrences: 0, reason: "a file now exists at this path with different content" }]
-            : parts.length
-              ? validateEdits(content, edits).checks.filter((c) => !c.ok)
-              : [{ index: 0, ok: false, occurrences: 0, reason: "the file is no longer in the mirror" }];
+          ? [
+              {
+                index: 0,
+                ok: false,
+                occurrences: 0,
+                reason:
+                  st.kind === "delete"
+                    ? "the file is already gone from the mirror — appears applied"
+                    : "appears already applied — the mirror already holds the proposed result",
+              },
+            ]
+          : st.kind === "delete"
+            ? [{ index: 0, ok: false, occurrences: 0, reason: "the file changed after this deletion was proposed — what would be removed is not what the author saw" }]
+            : st.kind === "create"
+              ? [{ index: 0, ok: false, occurrences: 0, reason: "a file now exists at this path with different content" }]
+              : parts.length
+                ? validateEdits(content, edits).checks.filter((c) => !c.ok)
+                : [{ index: 0, ok: false, occurrences: 0, reason: "the file is no longer in the mirror" }];
       const project = await prisma.project.findUnique({ where: { id: s.projectId }, select: { repoUrl: true } });
       return {
         suggestionId: s.id,
@@ -1298,17 +1371,22 @@ export const tools: Tool[] = [
         noteItemId: s.noteItemId,
         proposedAgainst: s.baseRef ?? s.baseHash ?? "(new file)",
         ...(st.kind === "create" ? { createsFile: true } : {}),
+        ...(st.kind === "delete" ? { deletesFile: true } : {}),
         stillApplies: st.stillApplies,
         ...(st.stillApplies ? {} : { blockers }),
-        ...(st.stillApplies && withResult && s.status === "approved"
-          ? { resultingContent: st.kind === "create" ? edits[0].after : applyEdits(content, edits) }
+        ...(st.stillApplies && withResult && s.status === "approved" && st.kind !== "delete"
+          ? { resultingContent: st.kind === "create" ? createContent(edits) : applyEdits(content, edits) }
           : {}),
         hint: st.stillApplies
           ? s.status === "approved"
-            ? `Approved. Apply ${st.kind === "create" ? "this new file" : "these edits"} to your real checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push — CI mirrors the result. The vault does not write to git.`
+            ? st.kind === "delete"
+              ? `Approved. Delete the file in your real checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""} (git rm "${s.path}"), commit and push — CI mirrors the removal and this closes itself.`
+              : `Approved. Apply ${st.kind === "create" ? "this new file" : "these edits"} to your real checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push — CI mirrors the result. The vault does not write to git.`
             : "Not yet reviewed. review_suggestion approves or rejects it (owner/executive)."
           : st.applied
-            ? "This appears already applied — the mirror holds exactly the proposed content."
+            ? st.kind === "delete"
+              ? "The file is already gone from the mirror — this deletion appears applied."
+              : "This appears already applied — the mirror holds exactly the proposed content."
             : "This no longer fits the mirror as it stands. Ask the author to re-read and re-propose.",
       };
     },
@@ -1338,14 +1416,18 @@ export const tools: Tool[] = [
       const parts = await prisma.codeFile.findMany({ where: { projectId: s.projectId, path: s.path }, orderBy: { part: "asc" } });
       const content = parts.map((p) => p.content).join("");
       const edits = JSON.parse(s.edits) as Edit[];
-      const st = suggestionState(parts.length ? content : null, edits);
+      const st = suggestionState(parts.length ? content : null, edits, s.baseHash);
       if (verdict === "approve" && !st.stillApplies) {
         throw new Error(
           st.applied
-            ? "this appears already applied — the mirror already holds the proposed result; nothing to approve."
-            : st.kind === "create"
-              ? "a different file now exists at this path — ask the author to re-propose anchored edits against it."
-              : "this no longer fits the current file — the code it anchors to has changed since it was proposed. Ask the author to re-propose against the current version.",
+            ? st.kind === "delete"
+              ? "the file is already gone from the mirror — this deletion appears applied; nothing to approve."
+              : "this appears already applied — the mirror already holds the proposed result; nothing to approve."
+            : st.kind === "delete"
+              ? "the file changed after this deletion was proposed — what would be removed is not what the author saw. Ask them to confirm and re-propose."
+              : st.kind === "create"
+                ? "a different file now exists at this path — ask the author to re-propose anchored edits against it."
+                : "this no longer fits the current file — the code it anchors to has changed since it was proposed. Ask the author to re-propose against the current version.",
         );
       }
       const updated = await prisma.codeSuggestion.update({
@@ -1366,9 +1448,48 @@ export const tools: Tool[] = [
         reviewedBy: approver.username,
         next:
           verdict === "approve"
-            ? `get_suggestion { suggestionId: "${suggestionId}", withResult: true } gives you the resulting file. Apply it to your checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push; CI mirrors it and this closes itself.`
+            ? st.kind === "delete"
+              ? `Delete the file in your checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""} (git rm "${s.path}"), commit and push; CI mirrors the removal and this closes itself.`
+              : `get_suggestion { suggestionId: "${suggestionId}", withResult: true } gives you the resulting file. Apply it to your checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push; CI mirrors it and this closes itself.`
             : `${s.suggestedBy} can revise and propose again.`,
       };
+    },
+  },
+  {
+    name: "withdraw_suggestion",
+    description:
+      "Take back a suggestion you filed, while it is still open — wrong idea, superseded by a better proposal, or filed by mistake. Only the suggester (or an owner/executive) may withdraw, and only while status is open: reviewed suggestions keep their verdict.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        suggestionId: { type: "string" },
+        reason: { type: "string", description: "optional: why — recorded in the audit trail" },
+        actor: { type: "string", description: "who is withdrawing (ignored when authenticated)" },
+      },
+      required: ["suggestionId"],
+    },
+    handler: async (a, ctx) => {
+      const { suggestionId, reason } = a as { suggestionId: string; reason?: string };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const s = await prisma.codeSuggestion.findUnique({ where: { id: suggestionId } });
+      if (!s) throw new Error("suggestion not found");
+      if (s.status !== "open") throw new Error(`this suggestion is already ${s.status} — only open suggestions can be withdrawn`);
+      // The suggester takes back their own; an owner/executive can clear anyone's
+      // (a stale proposal from a departed collaborator must not be immortal).
+      const acc = ctx?.account;
+      const isApprover = Boolean(acc && acc.status === "approved" && (acc.role === "owner" || acc.role === "executive"));
+      if (!isApprover && actor !== s.suggestedBy) {
+        throw new Error(`only '${s.suggestedBy}' (the suggester) or an owner/executive can withdraw this`);
+      }
+      const updated = await prisma.codeSuggestion.update({
+        where: { id: suggestionId },
+        data: { status: "withdrawn", reviewNote: reason?.trim() || null },
+        select: { id: true, status: true, path: true },
+      });
+      await prisma.auditEvent.create({
+        data: { action: "withdraw_suggestion", actor, target: s.projectId, detail: `${s.path} (${suggestionId})${reason?.trim() ? ` — ${reason.trim().slice(0, 200)}` : ""}` },
+      });
+      return { ...updated, by: actor };
     },
   },
   {

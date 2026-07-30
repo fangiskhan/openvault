@@ -91,10 +91,18 @@ export async function PATCH(req: Request, { params }: Ctx) {
   return Response.json(item);
 }
 
-export async function DELETE(_req: Request, { params }: Ctx) {
+export async function DELETE(req: Request, { params }: Ctx) {
   const denied = await requireAuth();
   if (denied) return denied;
   const { id } = await params;
-  await prisma.item.delete({ where: { id } }).catch(() => null);
-  return Response.json({ ok: true });
+  // No silent .catch(() => null): "deleted a row that existed" and "deleted
+  // nothing" are different answers, and destruction deserves an audit row —
+  // the append-only trail is what records that the item ever existed at all.
+  const existing = await prisma.item.findUnique({ where: { id }, select: { id: true, projectId: true, title: true } });
+  if (!existing) return notFound();
+  await prisma.item.delete({ where: { id } });
+  await prisma.auditEvent.create({
+    data: { action: "delete_item", actor: await actorFor(req), target: existing.projectId, detail: `"${existing.title}" (${id}) — via web` },
+  });
+  return Response.json({ ok: true, deleted: id });
 }

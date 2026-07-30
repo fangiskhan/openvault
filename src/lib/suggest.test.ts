@@ -1,5 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { validateEdits, applyEdits, stillApplies, looksApplied, editsFromContents, suggestionState, isCreateEdits } from "./suggest";
+import {
+  validateEdits,
+  applyEdits,
+  stillApplies,
+  looksApplied,
+  editsFromContents,
+  suggestionState,
+  isCreateEdits,
+  isDeleteEdits,
+  createContent,
+  DELETE_SENTINEL,
+} from "./suggest";
+import { hashContent } from "./code";
 
 const FILE = `def get_llm_response(messages_context, image_input):
     if image_input:
@@ -219,6 +231,48 @@ describe("create proposals — a file the mirror does not have", () => {
 
   it("an ordinary edit against a missing file neither applies nor is applied", () => {
     expect(suggestionState(null, [{ before: "a", after: "b" }])).toEqual({ kind: "edit", stillApplies: false, applied: false });
+  });
+});
+
+describe("multi-part creates — one big file, one suggestion", () => {
+  const PARTS = [
+    { before: "", after: "// part one\n" },
+    { before: "", after: "// part two\n" },
+  ];
+
+  it("recognises a multi-part create and joins its content in order", () => {
+    expect(isCreateEdits(PARTS)).toBe(true);
+    expect(createContent(PARTS)).toBe("// part one\n// part two\n");
+  });
+
+  it("multi-part applied detection compares against the JOINED content", () => {
+    expect(suggestionState(null, PARTS).stillApplies).toBe(true);
+    expect(suggestionState("// part one\n// part two\n", PARTS).applied).toBe(true);
+    expect(suggestionState("// part one\n", PARTS).applied).toBe(false); // half a file is not applied
+  });
+
+  it("a mixed batch (one empty before among real edits) is NOT a create", () => {
+    expect(isCreateEdits([{ before: "", after: "x" }, { before: "a", after: "b" }])).toBe(false);
+  });
+});
+
+describe("deletion proposals", () => {
+  const FILE = "old code\nnobody needs\n";
+
+  it("the sentinel is unmistakable: not a create, not a valid edit", () => {
+    expect(isDeleteEdits(DELETE_SENTINEL)).toBe(true);
+    expect(isCreateEdits(DELETE_SENTINEL)).toBe(false); // no visible content
+    expect(validateEdits(FILE, DELETE_SENTINEL).ok).toBe(false); // empty before
+  });
+
+  it("applies while the file is unchanged, goes stale when it changes, applied when gone", () => {
+    const base = hashContent(FILE);
+    expect(suggestionState(FILE, DELETE_SENTINEL, base)).toEqual({ kind: "delete", stillApplies: true, applied: false });
+    // Someone edited the file after deletion was proposed: what would be
+    // removed is no longer what the author saw. Stale, not deletable.
+    expect(suggestionState(FILE + "new line\n", DELETE_SENTINEL, base).stillApplies).toBe(false);
+    // File gone: the deletion happened (however it happened). Done.
+    expect(suggestionState(null, DELETE_SENTINEL, base)).toEqual({ kind: "delete", stillApplies: false, applied: true });
   });
 });
 

@@ -455,6 +455,143 @@ describe("code mirror: concurrent writes and recoverability", () => {
     expect(full.blockers?.[0]?.reason).toMatch(/already applied/);
   });
 
+  it("carries a deletion proposal through its whole life: propose, approve, self-close", async () => {
+    const p = await newProject("del1");
+    const path = "src/dead.ts";
+    await sync({ projectId: p.id, files: [{ path, content: "export const DEAD = true;" }] });
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+    const suggest = toolMap.get("suggest_change")!;
+
+    // deleteFile on a path the mirror does not have: nothing to delete.
+    await expect(
+      suggest.handler({ projectId: p.id, path: "src/ghost.ts", deleteFile: true, reason: "This module is dead code now." }, ctxOf(bob)),
+    ).rejects.toThrow(/nothing to propose deleting/);
+
+    const made = (await suggest.handler(
+      { projectId: p.id, path, deleteFile: true, reason: "Dead code — its last caller was removed in the refactor." },
+      ctxOf(bob),
+    )) as { suggestionId: string; deletesFile?: boolean };
+    expect(made.deletesFile).toBe(true);
+
+    const listed = (await toolMap.get("list_suggestions")!.handler({ projectId: p.id })) as {
+      suggestions: Array<{ deletesFile?: boolean; stillApplies: boolean }>;
+    };
+    expect(listed.suggestions[0].deletesFile).toBe(true);
+    expect(listed.suggestions[0].stillApplies).toBe(true);
+
+    const v = (await toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, exec)) as {
+      status: string;
+      next: string;
+    };
+    expect(v.status).toBe("approved");
+    expect(v.next).toMatch(/git rm/);
+
+    // The owner deletes it in their checkout and pushes; CI mirrors the removal.
+    await sync({ projectId: p.id, files: [], deletes: [path] });
+    const after = (await toolMap.get("get_suggestion")!.handler({ suggestionId: made.suggestionId })) as {
+      stillApplies: boolean;
+      hint: string;
+    };
+    expect(after.stillApplies).toBe(false);
+    expect(after.hint).toMatch(/already gone/);
+  });
+
+  it("a deletion goes stale when the file changes before review", async () => {
+    const p = await newProject("del2");
+    const path = "src/maybe.ts";
+    await sync({ projectId: p.id, files: [{ path, content: "v1" }] });
+    const made = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path, deleteFile: true, reason: "Looks unused from where I sit." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+    // Someone updates the file — clearly NOT unused.
+    const cur = await readCode(p.id, path);
+    await sync({ projectId: p.id, files: [{ path, content: "v2 — now load-bearing", baseHash: cur.hash }] }, alice);
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+    await expect(toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, exec)).rejects.toThrow(
+      /changed after this deletion was proposed/,
+    );
+  });
+
+  it("accepts a multi-part new file and returns the joined content on approval", async () => {
+    const p = await newProject("mp1");
+    const partA = "// A\n".repeat(10);
+    const partB = "// B\n".repeat(10);
+    const made = (await toolMap.get("suggest_change")!.handler(
+      {
+        projectId: p.id,
+        path: "src/big.ts",
+        edits: [
+          { before: "", after: partA },
+          { before: "", after: partB },
+        ],
+        reason: "A generated module too large for a single part.",
+      },
+      ctxOf(bob),
+    )) as { suggestionId: string; createsFile?: boolean };
+    expect(made.createsFile).toBe(true);
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+    await toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, exec);
+    const full = (await toolMap.get("get_suggestion")!.handler({ suggestionId: made.suggestionId, withResult: true })) as {
+      resultingContent?: string;
+    };
+    expect(full.resultingContent).toBe(partA + partB);
+  });
+
+  it("withdraw: the suggester can take back an open suggestion; a stranger cannot", async () => {
+    const p = await newProject("wd1");
+    await sync({ projectId: p.id, files: [{ path: "src/w.ts", content: "x = 1" }] });
+    const made = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path: "src/w.ts", edits: [{ before: "x = 1", after: "x = 2" }], reason: "Bump the constant for the demo." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+
+    const withdraw = toolMap.get("withdraw_suggestion")!;
+    // A different member cannot withdraw someone else's proposal.
+    await expect(withdraw.handler({ suggestionId: made.suggestionId }, ctxOf(alice))).rejects.toThrow(/only 'bob-dev'/);
+    const w = (await withdraw.handler({ suggestionId: made.suggestionId, reason: "superseded" }, ctxOf(bob))) as { status: string };
+    expect(w.status).toBe("withdrawn");
+    // Withdrawn is final for review purposes.
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+    await expect(toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, exec)).rejects.toThrow(
+      /already withdrawn/,
+    );
+  });
+
+  it("delete_item removes a note, audits it, and refuses a member", async () => {
+    const p = await newProject("di1");
+    const item = await prisma.item.create({
+      data: { projectId: p.id, title: "Wrong claim", body: "This turned out to be false.", type: "note", createdBy: "bob-dev", updatedBy: "bob-dev" },
+    });
+    const del = toolMap.get("delete_item")!;
+    await expect(del.handler({ itemId: item.id }, ctxOf(bob))).rejects.toThrow(/owner\/executive/);
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+    const r = (await del.handler({ itemId: item.id, reason: "superseded by the corrected note" }, exec)) as { deleted: boolean };
+    expect(r.deleted).toBe(true);
+    expect(await prisma.item.findUnique({ where: { id: item.id } })).toBeNull();
+    const audit = await prisma.auditEvent.findFirst({ where: { action: "delete_item", target: p.id }, orderBy: { createdAt: "desc" } });
+    expect(audit?.detail).toContain("Wrong claim");
+    expect(audit?.detail).toContain("superseded");
+  });
+
+  it("import_notes updates an existing note by title instead of duplicating it", async () => {
+    const importTool = toolMap.get("import_notes")!;
+    const name = "ImportDedup-" + Date.now();
+    const first = (await importTool.handler(
+      { projectName: name, notes: [{ title: "The Decision", body: "v1 of the reasoning" }] },
+      ctxOf(bob),
+    )) as { projectId: string; noteCount: number };
+    const second = (await importTool.handler(
+      { projectName: name, notes: [{ title: "the decision", body: "v2 — corrected" }] },
+      ctxOf(bob),
+    )) as { noteCount: number; updated?: number };
+    expect(second.updated).toBe(1);
+    const items = await prisma.item.findMany({ where: { projectId: first.projectId } });
+    expect(items).toHaveLength(1); // updated, not duplicated — case-insensitive
+    expect(items[0].body).toContain("v2 — corrected");
+    await prisma.project.delete({ where: { id: first.projectId } });
+  });
+
   it("refuses an ambiguous anchor at proposal time rather than misapplying it later", async () => {
     const p = await newProject("sugg3");
     await sync({ projectId: p.id, files: [{ path: "src/dup.ts", content: "let x = 1;\nlet y = 2;\nlet x = 1;" }] });

@@ -17,7 +17,7 @@
 // the reason, which is staleness detection working, not a bug.
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { editsFromContents, MAX_EDIT_CHARS } from "../src/lib/suggest";
+import { editsFromContents, MAX_EDIT_CHARS, MAX_EDITS } from "../src/lib/suggest";
 
 // readdirSync's recursive walk needs Node 20.1+; older Nodes silently ignore
 // the option and misreport every nested edit as a local deletion.
@@ -115,7 +115,27 @@ for (const path of [...new Set([...working, ...basePaths])].sort()) {
   const inWork = working.has(path);
   try {
     if (inBase && !inWork) {
-      results.push({ path, outcome: "SKIP — deleted locally; deletion proposals aren't supported yet, tell the owner in a note" });
+      // A file deleted in the working copy becomes a deletion proposal — the
+      // third change type, so a refactor's removals travel through the same
+      // reviewed queue as its additions instead of a side-channel note.
+      if (open.has(path)) {
+        results.push({ path, outcome: `SKIP — an open suggestion already covers this path (${open.get(path)}); review or reject it first` });
+        continue;
+      }
+      if (dryRun) {
+        results.push({ path, outcome: "would propose DELETING this file" });
+        continue;
+      }
+      const r = await call("suggest_change", {
+        projectId: meta.projectId,
+        path,
+        deleteFile: true,
+        reason,
+        expectedHash: meta.files[path],
+        title: title ? `${title}: delete ${path}` : `Delete ${path}`,
+      });
+      filed++;
+      results.push({ path, outcome: `DELETE -> suggestion ${r.suggestionId}${r.warning ? ` — WARNING: ${r.warning}` : ""}` });
       continue;
     }
     if (!inBase && inWork) {
@@ -133,27 +153,32 @@ for (const path of [...new Set([...working, ...basePaths])].sort()) {
         results.push({ path, outcome: "SKIP — empty file" });
         continue;
       }
-      if (content.length > MAX_EDIT_CHARS) {
-        results.push({ path, outcome: `SKIP — new file over ${MAX_EDIT_CHARS} chars; sync it or split it` });
+      // A new file larger than one edit travels as PARTS of one suggestion —
+      // the content is the afters concatenated — up to MAX_EDITS × the per-part
+      // cap. Beyond that it genuinely is too big for a reviewable proposal.
+      if (content.length > MAX_EDIT_CHARS * MAX_EDITS) {
+        results.push({ path, outcome: `SKIP — new file over ${MAX_EDIT_CHARS * MAX_EDITS} chars; sync it directly or split the file itself` });
         continue;
       }
       if (open.has(path)) {
         results.push({ path, outcome: `SKIP — an open suggestion already covers this path (${open.get(path)}); review or reject it first` });
         continue;
       }
+      const parts: string[] = [];
+      for (let at = 0; at < content.length; at += MAX_EDIT_CHARS) parts.push(content.slice(at, at + MAX_EDIT_CHARS));
       if (dryRun) {
-        results.push({ path, outcome: "would propose as a NEW file" });
+        results.push({ path, outcome: parts.length > 1 ? `would propose as a NEW file in ${parts.length} parts` : "would propose as a NEW file" });
         continue;
       }
       const r = await call("suggest_change", {
         projectId: meta.projectId,
         path,
-        edits: [{ before: "", after: content }],
+        edits: parts.map((p) => ({ before: "", after: p })),
         reason,
         title: title ? `${title}: ${path}` : `New file ${path}`,
       });
       filed++;
-      results.push({ path, outcome: `NEW file -> suggestion ${r.suggestionId}` });
+      results.push({ path, outcome: `NEW file${parts.length > 1 ? ` (${parts.length} parts)` : ""} -> suggestion ${r.suggestionId}` });
       continue;
     }
     const base = norm(readFileSync(join(dir, ".openvault", "base", path), "utf8"));

@@ -132,27 +132,49 @@ export async function importProject(input: ImportInput) {
   const notes = withRelatedLinks(input.notes, existingNotes);
 
   const by = input.actor || "import";
-  const created: { id: string; body: string }[] = [];
-  for (const n of notes) {
+  // Idempotent by title: re-importing a note UPDATES the existing item instead
+  // of filing a duplicate. import_notes used to create unconditionally, so a
+  // re-run — the normal case for "update the vault's copy of X" — left two
+  // items with identical titles competing in search, with wikilink resolution
+  // picking one arbitrarily. Case-insensitive, matching how wikilinks resolve.
+  // One titles fetch up front, kept current as the batch lands, so a batch that
+  // repeats a title (or a re-imported MOC) also folds onto itself.
+  const titleToId = new Map<string, string>(
+    (await prisma.item.findMany({ where: { projectId: project.id }, select: { id: true, title: true } })).map((r) => [
+      r.title.toLowerCase(),
+      r.id,
+    ]),
+  );
+  const upsertByTitle = async (title: string, body: string, type: string) => {
+    const existingId = titleToId.get(title.toLowerCase());
+    if (existingId) {
+      const item = await prisma.item.update({
+        where: { id: existingId },
+        data: { body, type, updatedBy: by },
+        select: { id: true, body: true },
+      });
+      return { item, updated: true };
+    }
     const item = await prisma.item.create({
-      data: {
-        projectId: project.id,
-        title: n.title,
-        body: n.body,
-        type: n.type ?? "note",
-        source: "import",
-        createdBy: by,
-        updatedBy: by,
-      },
+      data: { projectId: project!.id, title, body, type, source: "import", createdBy: by, updatedBy: by },
+      select: { id: true, body: true },
     });
+    titleToId.set(title.toLowerCase(), item.id);
+    return { item, updated: false };
+  };
+
+  const created: { id: string; body: string }[] = [];
+  let updatedCount = 0;
+  for (const n of notes) {
+    const { item, updated } = await upsertByTitle(n.title, n.body, n.type ?? "note");
+    if (updated) updatedCount++;
     created.push({ id: item.id, body: item.body });
   }
 
   if (input.mocTitle && created.length) {
     const body = `# ${input.mocTitle}\n\n` + input.notes.map((n) => `- [[${n.title}]]`).join("\n");
-    const moc = await prisma.item.create({
-      data: { projectId: project.id, title: input.mocTitle, body, type: "note", source: "import", createdBy: by, updatedBy: by },
-    });
+    const { item: moc, updated } = await upsertByTitle(input.mocTitle, body, "note");
+    if (updated) updatedCount++;
     created.push({ id: moc.id, body: moc.body });
   }
 
@@ -176,5 +198,5 @@ export async function importProject(input: ImportInput) {
   for (const it of created) await syncItemLinks(it.id, project.id, it.body);
   for (const it of created) await resolveGhostLinks(it.id, project.id, project.name);
 
-  return { projectId: project.id, slug: project.slug, noteCount: created.length };
+  return { projectId: project.id, slug: project.slug, noteCount: created.length, updated: updatedCount };
 }

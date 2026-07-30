@@ -1,4 +1,5 @@
 import { splitLines, lcsPairs, MAX_LCS_LINES } from "./diff";
+import { hashContent } from "./code";
 
 // Verification for proposed code changes.
 //
@@ -128,10 +129,12 @@ export function looksApplied(content: string, edits: Edit[]): boolean {
 
 // A compact human/agent-readable rendering for review.
 export function renderEdits(path: string, edits: Edit[]): string {
+  if (isDeleteEdits(edits)) return `**${path}**\n\n### delete this file`;
+  const parts = edits.length;
   const body = edits
     .map((e, i) =>
       e.before === ""
-        ? `### edit ${i + 1} (new file)\n\n\`\`\`\n+ ${splitLines(e.after).join("\n+ ")}\n\`\`\``
+        ? `### ${parts > 1 ? `new file, part ${i + 1}/${parts}` : "new file"}\n\n\`\`\`\n+ ${splitLines(e.after).join("\n+ ")}\n\`\`\``
         : `### edit ${i + 1}\n\n\`\`\`\n- ${splitLines(e.before).join("\n- ")}\n\`\`\`\n\n\`\`\`\n+ ${splitLines(e.after).join("\n+ ")}\n\`\`\``,
     )
     .join("\n\n");
@@ -139,19 +142,34 @@ export function renderEdits(path: string, edits: Edit[]): string {
 }
 
 // A create proposal: the file is not in the mirror, so there is nothing to
-// anchor on. By convention it is exactly one edit whose before is empty and
-// whose after is the entire file content.
+// anchor on. Every edit has an empty before; the file's content is the afters
+// CONCATENATED in order. One part is the common case; several parts let a file
+// larger than MAX_EDIT_CHARS travel as one reviewable suggestion instead of
+// being split across coupled proposals (the 52k stylesheet problem).
 //
 // The content gate strips zero-width characters before trimming: trim() does
 // not remove U+200B/U+200C/U+200D/U+FEFF, so without this an "invisible" file
 // consisting of one zero-width space passes as real content.
 export function isCreateEdits(edits: Edit[]): boolean {
   return (
-    edits.length === 1 &&
-    edits[0].before === "" &&
-    typeof edits[0].after === "string" &&
-    edits[0].after.replace(/[\u200B-\u200D\uFEFF]/g, "").trim().length > 0
+    edits.length >= 1 &&
+    edits.every((e) => e.before === "" && typeof e.after === "string") &&
+    createContent(edits).replace(/[\u200B-\u200D\uFEFF]/g, "").trim().length > 0
   );
+}
+
+// The full content a create proposal carries: its parts, joined in order.
+export function createContent(edits: Edit[]): string {
+  return edits.map((e) => e.after ?? "").join("");
+}
+
+// A delete proposal: "remove this file". Encoded as the one edit shape that is
+// impossible for both other kinds \u2014 a single entry with BOTH sides empty (an
+// edit needs a non-empty before; a create needs visible content) \u2014 so legacy
+// rows can never be misread and no schema change is needed.
+export const DELETE_SENTINEL: Edit[] = [{ before: "", after: "" }];
+export function isDeleteEdits(edits: Edit[]): boolean {
+  return edits.length === 1 && edits[0].before === "" && edits[0].after === "";
 }
 
 // One verdict for every handler that needs to know whether a stored suggestion
@@ -162,7 +180,19 @@ export function isCreateEdits(edits: Edit[]): boolean {
 export function suggestionState(
   currentContent: string | null,
   edits: Edit[],
-): { kind: "create" | "edit"; stillApplies: boolean; applied: boolean } {
+  baseHash?: string | null,
+): { kind: "create" | "edit" | "delete"; stillApplies: boolean; applied: boolean } {
+  if (isDeleteEdits(edits)) {
+    // For a deletion, ABSENCE is success: the file being gone means the owner
+    // did it (or it went another way — either way there is nothing left to do).
+    if (currentContent === null) return { kind: "delete", stillApplies: false, applied: true };
+    // Present, but changed since the deletion was proposed? Then the proposer
+    // was looking at a different file than the one that would now be deleted —
+    // stale, exactly like an edit whose anchor moved. Without a recorded hash
+    // (should not happen) stay permissive rather than wedging the proposal.
+    const stillApplies = baseHash ? hashContent(currentContent) === baseHash : true;
+    return { kind: "delete", stillApplies, applied: false };
+  }
   if (isCreateEdits(edits)) {
     // An EMPTY mirrored file counts as absent: a placeholder like __init__.py
     // has no text an ordinary edit could anchor on, so without this the file
@@ -173,7 +203,7 @@ export function suggestionState(
     // Trailing-newline tolerance: a formatter appending "\n" to the applied
     // file is the near-universal case, and it must read as applied — not as
     // "a different file now exists".
-    const applied = norm(currentContent).replace(/\n+$/, "") === norm(edits[0].after).replace(/\n+$/, "");
+    const applied = norm(currentContent).replace(/\n+$/, "") === norm(createContent(edits)).replace(/\n+$/, "");
     return { kind: "create", stillApplies: false, applied };
   }
   if (currentContent === null) return { kind: "edit", stillApplies: false, applied: false };

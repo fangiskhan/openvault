@@ -540,15 +540,40 @@ Not connected? \`claude mcp add openvault ${base}/api/mcp --transport http --sco
   change. If the response lists overlapping active intents, coordinate (or pick
   different work) instead of colliding.
 - Need current code without pulling git? \`get_code_map\` (tree + hashes) and
-  \`read_code\` (one file) serve the latest synced mirror.
+  \`read_code\` (one file) serve the latest synced mirror. For more than a file
+  or two, materialise a working copy instead — \`scripts/checkout-mirror.ts\`
+  from the OpenVault repo pulls the whole mirror to a local directory so you
+  work with your normal file tools at native speed.
+- **Check \`list_suggestions\` for this project.** Open proposals may already
+  cover what you're about to do — and if you work for the project's owner,
+  pending ones are waiting on your review.
+
+## Changing code you cannot push yourself
+
+If you have no git access here, or the mirror is a replica (sync_code will
+refuse you and say so): propose the change instead of writing it.
+
+- \`suggest_change\` takes content-anchored edits — the EXACT text to replace
+  and what it becomes, never line numbers. For a NEW file, send edits with
+  \`before: ""\` carrying the content (several parts if it's big). To propose
+  REMOVING a file, pass \`deleteFile: true\`. The \`reason\` is required and
+  becomes a note that outlives the review.
+- Edited a working copy? \`scripts/propose-changes.ts\` diffs it against its
+  base and files everything — edits, new files, deletions — automatically.
+- Filed something wrong or superseded? \`withdraw_suggestion\` takes back your
+  own open proposal.
+- Approval hands the OWNER the result to apply in their real checkout. The
+  vault never writes to git; nothing lands that a human didn't apply.
 
 ## When you finish — review, then the handover
 
-- \`sync_code\` the files you changed (diff hashes via \`get_code_map\`; send
-  only what changed), then \`update_work\` with \`status: "in_review"\`.
-- **Do NOT \`git push\` yet.** An owner/executive reviews the synced files and
-  calls \`review_work\` — approve means merge/push now; request_changes comes
-  back with a note in \`get_active_work\`. Address it and resubmit.
+- On a workspace-mode mirror: \`sync_code\` the files you changed (diff hashes
+  via \`get_code_map\`, ALWAYS pass \`baseHash\`), then \`update_work\` with
+  \`status: "in_review"\`. On a replica-mode mirror there is nothing to sync —
+  your suggestions ARE the submission.
+- **Do NOT \`git push\` yet.** An owner/executive reviews and calls
+  \`review_work\` — approve means merge/push now; request_changes comes back
+  with a note in \`get_active_work\`. Address it and resubmit.
 - After approval: \`append_update\` (actor = your name, e.g. "claude-code") with
   a 1–3 sentence summary of what you did and what's next.
 

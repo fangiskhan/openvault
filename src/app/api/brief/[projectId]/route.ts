@@ -22,7 +22,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
   if (!project) return new Response("unknown project", { status: 404 });
 
   const scope = new URL(req.url).searchParams.get("scope") ?? "connected";
-  const [b, work, skills] = await Promise.all([
+  const [b, work, skills, suggestions] = await Promise.all([
     buildTemplatedBriefing(projectId, scope),
     prisma.workIntent.findMany({
       where: { projectId, status: { in: [...ACTIVE_WORK_STATUSES] } },
@@ -33,6 +33,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
       where: { projectId },
       orderBy: { name: "asc" },
       select: { name: true, description: true },
+    }),
+    // Proposed code changes waiting on a human verdict. Surfaced HERE because a
+    // proposal nobody sees is a proposal that never happened — the owner's
+    // agent must meet the queue at session start, not after thinking to ask.
+    prisma.codeSuggestion.findMany({
+      where: { projectId, status: "open" },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, path: true, title: true, suggestedBy: true },
     }),
   ]);
 
@@ -54,6 +63,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
     }
     lines.push("");
   }
+  if (suggestions.length) {
+    lines.push("## Open code suggestions (proposed changes awaiting review)");
+    for (const s of suggestions) lines.push(`- ${s.title ?? s.path} — by ${s.suggestedBy} (${s.id})`);
+    lines.push("(list_suggestions for staleness, get_suggestion for the edits; review_suggestion to approve/reject if you act for an owner/executive)");
+    lines.push("");
+  }
   if (b.recentlyUpdated.length) {
     lines.push("## Recently updated");
     for (const r of b.recentlyUpdated) lines.push(`- ${r.title} (${r.type}, ${r.projectName})`);
@@ -68,7 +83,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
     lines.push("");
   }
   lines.push(
-    "Use the openvault MCP tools for detail (read_item, get_code_map) and to write back (announce_work before editing, sync_code + update_work in_review when done, append_update to hand over).",
+    "Use the openvault MCP tools for detail (read_item, get_code_map) and to write back (announce_work before editing, append_update to hand over). To change code you cannot push: suggest_change — anchored edits, before:'' parts for a new file, deleteFile:true to propose removing one; withdraw_suggestion takes back your own open proposal.",
   );
 
   return new Response(lines.join("\n"), {

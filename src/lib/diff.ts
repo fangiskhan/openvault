@@ -11,7 +11,7 @@
 // The hunks are computed by the SERVER from two stored versions, so no agent
 // has to remember to record what it did and none can misreport it.
 
-const MAX_LCS_LINES = 1200; // past this, report coarsely rather than slowly
+export const MAX_LCS_LINES = 1200; // past this, report coarsely rather than slowly
 const MAX_HUNKS = 10;
 const MAX_HUNK_LINES = 40;
 const REWRITE_FRACTION = 0.6;
@@ -36,7 +36,10 @@ export const splitLines = (s: string): string[] => s.replace(/\r\n/g, "\n").spli
 // Longest common subsequence over two line arrays, returned as the set of
 // indices to keep on each side. Only called on the differing middle, after the
 // shared head and tail are trimmed, so the matrix stays small for normal edits.
-function lcsPairs(a: string[], b: string[]): Array<[number, number]> {
+// Exported for suggest.ts, which turns a working-copy diff into exact,
+// content-anchored proposal edits (unclamped — the hunks below are display-
+// clamped and must never be used as edits).
+export function lcsPairs(a: string[], b: string[]): Array<[number, number]> {
   const n = a.length;
   const m = b.length;
   const dp = new Int32Array((n + 1) * (m + 1));

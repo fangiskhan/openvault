@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateEdits, applyEdits, stillApplies, looksApplied } from "./suggest";
+import { validateEdits, applyEdits, stillApplies, looksApplied, editsFromContents, suggestionState, isCreateEdits } from "./suggest";
 
 const FILE = `def get_llm_response(messages_context, image_input):
     if image_input:
@@ -54,6 +54,100 @@ describe("validateEdits", () => {
     const { ok, checks } = validateEdits(FILE, [{ before: "   ", after: "x" }]);
     expect(ok).toBe(false);
     expect(checks[0].reason).toMatch(/empty/);
+  });
+});
+
+describe("editsFromContents — a working-copy diff becomes anchored edits", () => {
+  const lines = (n: number, edits: Record<number, string> = {}) =>
+    Array.from({ length: n }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).join("\n");
+
+  it("reports no changes for identical content (including CRLF-only differences)", () => {
+    expect(editsFromContents("a\nb", "a\nb").ok).toBe(false);
+    expect(editsFromContents("a\r\nb", "a\nb").ok).toBe(false);
+  });
+
+  it("one middle edit becomes one anchored edit that validates and applies", () => {
+    const base = lines(50);
+    const edited = lines(50, { 25: "line 25 — CHANGED" });
+    const plan = editsFromContents(base, edited);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.edits).toHaveLength(1);
+    expect(validateEdits(base, plan.edits).ok).toBe(true);
+    expect(applyEdits(base, plan.edits)).toBe(edited);
+  });
+
+  it("two distant edits become two independent anchored edits", () => {
+    const base = lines(200);
+    const edited = lines(200, { 50: "line 50 — ALICE", 150: "line 150 — BOB" });
+    const plan = editsFromContents(base, edited);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.edits).toHaveLength(2);
+    expect(applyEdits(base, plan.edits)).toBe(edited);
+  });
+
+  it("widens context until a repeated region anchors unambiguously", () => {
+    // Alternating identical lines: narrow context matches more than once, so
+    // the generator must keep widening instead of filing an ambiguous edit.
+    const base = ["A", "B", "A", "B", "A", "B", "A", "B"].join("\n");
+    const edited = ["A", "B", "A", "C", "A", "B", "A", "B"].join("\n");
+    const plan = editsFromContents(base, edited);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(validateEdits(base, plan.edits).ok).toBe(true);
+    expect(applyEdits(base, plan.edits)).toBe(edited);
+  });
+
+  it("handles a CRLF working copy against an LF base", () => {
+    const base = lines(30);
+    const edited = lines(30, { 15: "line 15 — WIN" }).replace(/\n/g, "\r\n");
+    const plan = editsFromContents(base, edited);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(applyEdits(base, plan.edits)).toBe(lines(30, { 15: "line 15 — WIN" }));
+  });
+
+  it("handles appending at the end of the file", () => {
+    const base = lines(10);
+    const edited = base + "\nline 11 — appended";
+    const plan = editsFromContents(base, edited);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(applyEdits(base, plan.edits)).toBe(edited);
+  });
+
+  it("falls back to one whole-file edit when the span is too large to diff", () => {
+    // Every line changed in a 1,500-line file: past the LCS cost guard, so the
+    // plan degrades to a single whole-file replacement rather than failing.
+    const base = lines(1500);
+    const edited = Array.from({ length: 1500 }, (_, i) => `new ${i + 1}`).join("\n");
+    const plan = editsFromContents(base, edited);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.edits).toHaveLength(1);
+    expect(plan.edits[0].before).toBe(base);
+    expect(applyEdits(base, plan.edits)).toBe(edited);
+  });
+});
+
+describe("create proposals — a file the mirror does not have", () => {
+  const CREATE = [{ before: "", after: "export const NEW = 1;" }];
+
+  it("recognises the create form and rejects lookalikes", () => {
+    expect(isCreateEdits(CREATE)).toBe(true);
+    expect(isCreateEdits([{ before: "", after: "  " }])).toBe(false); // empty content
+    expect(isCreateEdits([...CREATE, { before: "x", after: "y" }])).toBe(false); // mixed
+  });
+
+  it("applies while the path is absent, is applied once the exact content exists", () => {
+    expect(suggestionState(null, CREATE)).toEqual({ kind: "create", stillApplies: true, applied: false });
+    expect(suggestionState("export const NEW = 1;", CREATE)).toEqual({ kind: "create", stillApplies: false, applied: true });
+    expect(suggestionState("something else", CREATE)).toEqual({ kind: "create", stillApplies: false, applied: false });
+  });
+
+  it("an ordinary edit against a missing file neither applies nor is applied", () => {
+    expect(suggestionState(null, [{ before: "a", after: "b" }])).toEqual({ kind: "edit", stillApplies: false, applied: false });
   });
 });
 

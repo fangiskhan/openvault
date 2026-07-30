@@ -1,4 +1,4 @@
-import { splitLines } from "./diff";
+import { splitLines, lcsPairs, MAX_LCS_LINES } from "./diff";
 
 // Verification for proposed code changes.
 //
@@ -107,7 +107,119 @@ export function looksApplied(content: string, edits: Edit[]): boolean {
 // A compact human/agent-readable rendering for review.
 export function renderEdits(path: string, edits: Edit[]): string {
   const body = edits
-    .map((e, i) => `### edit ${i + 1}\n\n\`\`\`\n- ${splitLines(e.before).join("\n- ")}\n\`\`\`\n\n\`\`\`\n+ ${splitLines(e.after).join("\n+ ")}\n\`\`\``)
+    .map((e, i) =>
+      e.before === ""
+        ? `### edit ${i + 1} (new file)\n\n\`\`\`\n+ ${splitLines(e.after).join("\n+ ")}\n\`\`\``
+        : `### edit ${i + 1}\n\n\`\`\`\n- ${splitLines(e.before).join("\n- ")}\n\`\`\`\n\n\`\`\`\n+ ${splitLines(e.after).join("\n+ ")}\n\`\`\``,
+    )
     .join("\n\n");
   return `**${path}**\n\n${body}`;
+}
+
+// A create proposal: the file is not in the mirror, so there is nothing to
+// anchor on. By convention it is exactly one edit whose before is empty and
+// whose after is the entire file content.
+export function isCreateEdits(edits: Edit[]): boolean {
+  return edits.length === 1 && edits[0].before === "" && typeof edits[0].after === "string" && edits[0].after.trim().length > 0;
+}
+
+// One verdict for every handler that needs to know whether a stored suggestion
+// still fits the world: list, get, and the approval gate. Centralised because
+// create proposals invert the meaning of "the file exists" — for an edit,
+// existence is a precondition; for a create, it is the failure (or, if the
+// content matches, the proof it was applied).
+export function suggestionState(
+  currentContent: string | null,
+  edits: Edit[],
+): { kind: "create" | "edit"; stillApplies: boolean; applied: boolean } {
+  if (isCreateEdits(edits)) {
+    if (currentContent === null) return { kind: "create", stillApplies: true, applied: false };
+    return { kind: "create", stillApplies: false, applied: norm(currentContent) === norm(edits[0].after) };
+  }
+  if (currentContent === null) return { kind: "edit", stillApplies: false, applied: false };
+  return { kind: "edit", stillApplies: validateEdits(currentContent, edits).ok, applied: looksApplied(currentContent, edits) };
+}
+
+// Turn a base/edited pair of file contents into content-anchored edits that
+// validateEdits will accept — the machinery behind scripts/propose-changes.ts,
+// which lets an agent edit a materialised working copy with its normal file
+// tools and have the diff filed as suggestions automatically.
+//
+// The interesting problem is uniqueness: each 'before' block must occur
+// exactly once in the base, or the suggestion is refused (rightly). So hunks
+// start with two lines of context and widen until they are unambiguous,
+// merging with neighbours when their context windows collide. If no widening
+// makes every hunk unique — or the change is too scattered or too large to
+// anchor — fall back to proposing the whole file, and if even that exceeds the
+// per-edit cap, say so rather than filing something that cannot apply.
+const CONTEXT_STEPS = [2, 5, 8, 11, 14];
+
+export type ProposalPlan = { ok: true; edits: Edit[] } | { ok: false; reason: string };
+
+export function editsFromContents(baseText: string, editedText: string): ProposalPlan {
+  const a = splitLines(baseText);
+  const b = splitLines(editedText);
+  const base = a.join("\n");
+  const edited = b.join("\n");
+  if (base === edited) return { ok: false, reason: "no changes" };
+
+  const whole = (): ProposalPlan => {
+    if (!base.trim()) return { ok: false, reason: "the base file is empty — nothing to anchor on" };
+    if (base.length > MAX_EDIT_CHARS || edited.length > MAX_EDIT_CHARS) {
+      return { ok: false, reason: "the change is too large or too scattered to anchor as edits; propose it manually in parts" };
+    }
+    return { ok: true, edits: [{ before: base, after: edited }] };
+  };
+
+  // Trim the shared head and tail so the LCS runs only over the differing span.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const midA = a.slice(head, a.length - tail);
+  const midB = b.slice(head, b.length - tail);
+  if (midA.length > MAX_LCS_LINES || midB.length > MAX_LCS_LINES) return whole();
+
+  // Runs of divergence between LCS anchor points, in document order.
+  type Run = { a0: number; a1: number; b0: number; b1: number };
+  const runs: Run[] = [];
+  {
+    let ia = 0;
+    let ib = 0;
+    for (const [pa, pb] of lcsPairs(midA, midB)) {
+      if (pa > ia || pb > ib) runs.push({ a0: ia, a1: pa, b0: ib, b1: pb });
+      ia = pa + 1;
+      ib = pb + 1;
+    }
+    if (ia < midA.length || ib < midB.length) runs.push({ a0: ia, a1: midA.length, b0: ib, b1: midB.length });
+  }
+
+  for (const ctx of CONTEXT_STEPS) {
+    // Merge runs whose context windows would overlap — otherwise two nearby
+    // hunks each claim the same context lines and neither anchors uniquely.
+    const merged: Run[] = [];
+    for (const r of runs) {
+      const last = merged[merged.length - 1];
+      if (last && (r.a0 - last.a1 <= ctx * 2 || r.b0 - last.b1 <= ctx * 2)) {
+        last.a1 = r.a1;
+        last.b1 = r.b1;
+      } else {
+        merged.push({ ...r });
+      }
+    }
+    if (merged.length > MAX_EDITS) continue; // wider context merges more; retry
+
+    const edits: Edit[] = merged.map((r) => ({
+      before: a.slice(Math.max(0, head + r.a0 - ctx), Math.min(a.length, head + r.a1 + ctx)).join("\n"),
+      after: b.slice(Math.max(0, head + r.b0 - ctx), Math.min(b.length, head + r.b1 + ctx)).join("\n"),
+    }));
+    if (edits.some((e) => e.before.length > MAX_EDIT_CHARS || e.after.length > MAX_EDIT_CHARS)) return whole();
+    if (edits.some((e) => !e.before.trim())) continue; // e.g. insertion with no context yet — widen
+
+    // The plan is only a plan if it validates AND reproduces the edited file
+    // exactly. The second check is cheap insurance against ordering subtleties
+    // in sequential replace-first-occurrence application.
+    if (validateEdits(base, edits).ok && applyEdits(base, edits) === edited) return { ok: true, edits };
+  }
+  return whole();
 }

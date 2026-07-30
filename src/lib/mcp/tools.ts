@@ -13,7 +13,7 @@ import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
 import { diffHunks, type Hunk } from "../diff";
-import { validateEdits, applyEdits, stillApplies, looksApplied, renderEdits, MAX_EDITS, type Edit } from "../suggest";
+import { validateEdits, applyEdits, suggestionState, isCreateEdits, renderEdits, MAX_EDITS, MAX_EDIT_CHARS, type Edit } from "../suggest";
 
 // What a teammate changed under you while you were editing, in the form you can
 // act on: the exact text that was there and the exact text that replaced it.
@@ -1079,7 +1079,7 @@ export const tools: Tool[] = [
   {
     name: "suggest_change",
     description:
-      "Propose a change to a file you cannot or should not write yourself — the route for a collaborator with no git access, or for any agent on a replica-mode project. Edits are content-anchored: give the EXACT text to replace and what to replace it with, not line numbers, because the file may move before anyone applies this. Each 'before' must appear exactly once in the file's current mirrored version; the server checks that and refuses otherwise, so a stale or ambiguous suggestion is caught now rather than misapplied later. The reason is required and becomes a linked note, so why this change happened outlives the review.",
+      "Propose a change to a file you cannot or should not write yourself — the route for a collaborator with no git access, or for any agent on a replica-mode project. Edits are content-anchored: give the EXACT text to replace and what to replace it with, not line numbers, because the file may move before anyone applies this. Each 'before' must appear exactly once in the file's current mirrored version; the server checks that and refuses otherwise, so a stale or ambiguous suggestion is caught now rather than misapplied later. To propose a NEW file, send exactly one edit with before: '' and the full content as after. The reason is required and becomes a linked note, so why this change happened outlives the review.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1123,14 +1123,22 @@ export const tools: Tool[] = [
       if (!isValidRepoPath(path)) throw new Error("invalid repo path");
 
       const rows = await prisma.codeFile.findMany({ where: { projectId, path }, orderBy: { part: "asc" } });
-      if (!rows.length) {
-        throw new Error(`'${path}' is not in the code mirror, so there is nothing to anchor a change against. get_code_map to see what is.`);
-      }
-      const content = rows.map((r) => r.content).join("");
-      const { checks, ok } = validateEdits(content, edits);
-      if (!ok) {
-        const bad = checks.filter((c) => !c.ok).map((c) => `edit ${c.index + 1}: ${c.reason}`);
-        throw new Error(`these edits do not match the file as it stands:\n${bad.join("\n")}`);
+      const creating = isCreateEdits(edits);
+      if (creating) {
+        // A NEW file: nothing to anchor on, so the one edit IS the file.
+        if (rows.length) throw new Error(`'${path}' already exists in the mirror — propose anchored edits to it instead of a new file.`);
+        if (edits[0].after.length > MAX_EDIT_CHARS) throw new Error(`a new-file proposal is capped at ${MAX_EDIT_CHARS} characters`);
+      } else if (!rows.length) {
+        throw new Error(
+          `'${path}' is not in the code mirror, so there is nothing to anchor a change against. get_code_map to see what is. To propose a NEW file, send exactly one edit with before: "" and the full content as after.`,
+        );
+      } else {
+        const content = rows.map((r) => r.content).join("");
+        const { checks, ok } = validateEdits(content, edits);
+        if (!ok) {
+          const bad = checks.filter((c) => !c.ok).map((c) => `edit ${c.index + 1}: ${c.reason}`);
+          throw new Error(`these edits do not match the file as it stands:\n${bad.join("\n")}`);
+        }
       }
 
       // The reason becomes a real note, linked to the project's knowledge graph.
@@ -1158,8 +1166,8 @@ export const tools: Tool[] = [
           edits: JSON.stringify(edits),
           reason: reason.trim(),
           title: title?.trim() || null,
-          baseHash: rows[0].hash,
-          baseRef: rows[0].ref,
+          baseHash: rows[0]?.hash ?? null,
+          baseRef: rows[0]?.ref ?? null,
           suggestedBy: actor,
           noteItemId: note.id,
         },
@@ -1175,7 +1183,7 @@ export const tools: Tool[] = [
         edits: edits.length,
         noteItemId: note.id,
         by: actor,
-        note: `Recorded against ${rows[0].ref ?? "the current mirror"}. An owner or executive reviews it with review_suggestion; nothing changes in the mirror or in git until they do${project.repoUrl ? `. If you have write access to ${project.repoUrl}, a pull request there is still the better route` : ""}.`,
+        note: `Recorded ${creating ? "as a NEW file" : `against ${rows[0]?.ref ?? "the current mirror"}`}. An owner or executive reviews it with review_suggestion; nothing changes in the mirror or in git until they do${project.repoUrl ? `. If you have write access to ${project.repoUrl}, a pull request there is still the better route` : ""}.`,
       };
     },
   },
@@ -1203,21 +1211,22 @@ export const tools: Tool[] = [
         const parts = await prisma.codeFile.findMany({ where: { projectId, path: s.path }, orderBy: { part: "asc" } });
         const content = parts.map((p) => p.content).join("");
         const edits = JSON.parse(s.edits) as Edit[];
-        const applied = parts.length ? looksApplied(content, edits) : false;
+        const st = suggestionState(parts.length ? content : null, edits);
         suggestions.push({
           suggestionId: s.id,
           path: s.path,
           title: s.title,
           reason: s.reason,
-          status: applied && s.status !== "applied" ? "applied" : s.status,
+          status: st.applied && s.status !== "applied" ? "applied" : s.status,
           suggestedBy: s.suggestedBy,
           reviewedBy: s.reviewedBy,
           reviewNote: s.reviewNote,
           editCount: edits.length,
           noteItemId: s.noteItemId,
           createdAt: s.createdAt,
-          stillApplies: parts.length ? stillApplies(content, edits) : false,
-          ...(applied ? { detectedInMirror: true } : {}),
+          stillApplies: st.stillApplies,
+          ...(st.kind === "create" ? { createsFile: true } : {}),
+          ...(st.applied ? { detectedInMirror: true } : {}),
         });
       }
       return {
@@ -1243,7 +1252,23 @@ export const tools: Tool[] = [
       const parts = await prisma.codeFile.findMany({ where: { projectId: s.projectId, path: s.path }, orderBy: { part: "asc" } });
       const content = parts.map((p) => p.content).join("");
       const edits = JSON.parse(s.edits) as Edit[];
-      const check = parts.length ? validateEdits(content, edits) : { ok: false, checks: [] };
+      const st = suggestionState(parts.length ? content : null, edits);
+      const blockers = st.stillApplies
+        ? []
+        : st.kind === "create"
+          ? [
+              {
+                index: 0,
+                ok: false,
+                occurrences: 0,
+                reason: st.applied
+                  ? "a file with exactly this content already exists — the proposal appears applied"
+                  : "a file now exists at this path with different content",
+              },
+            ]
+          : parts.length
+            ? validateEdits(content, edits).checks.filter((c) => !c.ok)
+            : [{ index: 0, ok: false, occurrences: 0, reason: "the file is no longer in the mirror" }];
       const project = await prisma.project.findUnique({ where: { id: s.projectId }, select: { repoUrl: true } });
       return {
         suggestionId: s.id,
@@ -1257,15 +1282,20 @@ export const tools: Tool[] = [
         reviewedBy: s.reviewedBy,
         reviewNote: s.reviewNote,
         noteItemId: s.noteItemId,
-        proposedAgainst: s.baseRef ?? s.baseHash,
-        stillApplies: check.ok,
-        ...(check.ok ? {} : { blockers: check.checks.filter((c) => !c.ok) }),
-        ...(check.ok && withResult && s.status === "approved" ? { resultingContent: applyEdits(content, edits) } : {}),
-        hint: check.ok
+        proposedAgainst: s.baseRef ?? s.baseHash ?? "(new file)",
+        ...(st.kind === "create" ? { createsFile: true } : {}),
+        stillApplies: st.stillApplies,
+        ...(st.stillApplies ? {} : { blockers }),
+        ...(st.stillApplies && withResult && s.status === "approved"
+          ? { resultingContent: st.kind === "create" ? edits[0].after : applyEdits(content, edits) }
+          : {}),
+        hint: st.stillApplies
           ? s.status === "approved"
-            ? `Approved. Apply these edits to your real checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push — CI mirrors the result. The vault does not write to git.`
+            ? `Approved. Apply ${st.kind === "create" ? "this new file" : "these edits"} to your real checkout${project?.repoUrl ? ` of ${project.repoUrl}` : ""}, commit and push — CI mirrors the result. The vault does not write to git.`
             : "Not yet reviewed. review_suggestion approves or rejects it (owner/executive)."
-          : "This no longer fits the current file — the code it anchors to has changed. Ask the author to re-read the file and re-propose.",
+          : st.applied
+            ? "This appears already applied — the mirror holds exactly the proposed content."
+            : "This no longer fits the mirror as it stands. Ask the author to re-read and re-propose.",
       };
     },
   },
@@ -1294,8 +1324,15 @@ export const tools: Tool[] = [
       const parts = await prisma.codeFile.findMany({ where: { projectId: s.projectId, path: s.path }, orderBy: { part: "asc" } });
       const content = parts.map((p) => p.content).join("");
       const edits = JSON.parse(s.edits) as Edit[];
-      if (verdict === "approve" && !(parts.length && stillApplies(content, edits))) {
-        throw new Error("this no longer fits the current file — the code it anchors to has changed since it was proposed. Ask the author to re-propose against the current version.");
+      const st = suggestionState(parts.length ? content : null, edits);
+      if (verdict === "approve" && !st.stillApplies) {
+        throw new Error(
+          st.kind === "create"
+            ? st.applied
+              ? "a file with exactly this content already exists in the mirror — the proposal appears applied; nothing to approve."
+              : "a different file now exists at this path — ask the author to re-propose anchored edits against it."
+            : "this no longer fits the current file — the code it anchors to has changed since it was proposed. Ask the author to re-propose against the current version.",
+        );
       }
       const updated = await prisma.codeSuggestion.update({
         where: { id: suggestionId },

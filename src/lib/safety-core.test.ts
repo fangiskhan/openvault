@@ -383,6 +383,41 @@ describe("code mirror: concurrent writes and recoverability", () => {
     ).rejects.toThrow(/no longer fits/);
   });
 
+  it("supports proposing a NEW file, and refuses approval once a different file appears", async () => {
+    const p = await newProject("sugg5");
+    const suggest = toolMap.get("suggest_change")!;
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+
+    // Anchored edits against an absent path are still refused — with guidance.
+    await expect(
+      suggest.handler({ projectId: p.id, path: "src/new.ts", edits: [{ before: "x", after: "y" }], reason: "a reason long enough to pass" }, ctxOf(bob)),
+    ).rejects.toThrow(/NEW file/);
+
+    const made = (await suggest.handler(
+      { projectId: p.id, path: "src/new.ts", edits: [{ before: "", after: "export const NEW = true;" }], reason: "Adds the flag module the fix needs.", title: "New flag module" },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+
+    const v = (await toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, exec)) as { status: string };
+    expect(v.status).toBe("approved");
+    const full = (await toolMap.get("get_suggestion")!.handler({ suggestionId: made.suggestionId, withResult: true })) as {
+      createsFile?: boolean;
+      resultingContent?: string;
+    };
+    expect(full.createsFile).toBe(true);
+    expect(full.resultingContent).toBe("export const NEW = true;");
+
+    // A second create proposal goes stale the moment a DIFFERENT file lands there.
+    const made2 = (await suggest.handler(
+      { projectId: p.id, path: "src/other.ts", edits: [{ before: "", after: "A" }], reason: "Adds another module for the demo." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+    await sync({ projectId: p.id, files: [{ path: "src/other.ts", content: "B" }] });
+    await expect(toolMap.get("review_suggestion")!.handler({ suggestionId: made2.suggestionId, verdict: "approve" }, exec)).rejects.toThrow(
+      /different file now exists/,
+    );
+  });
+
   it("refuses an ambiguous anchor at proposal time rather than misapplying it later", async () => {
     const p = await newProject("sugg3");
     await sync({ projectId: p.id, files: [{ path: "src/dup.ts", content: "let x = 1;\nlet y = 2;\nlet x = 1;" }] });

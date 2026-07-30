@@ -163,6 +163,63 @@ describe("review gate", () => {
   });
 });
 
+// A tool's description is the only thing an agent reads to decide what that
+// tool can do. It is as load-bearing as the handler and drifts silently: the
+// suggest_change description still said "exactly one edit" long after
+// multi-part creates shipped, and never mentioned deleteFile at all — caught by
+// a production tools/list check, not by any test. These pin the contract facts
+// an agent would act on.
+describe("tool descriptions stay true to their handlers", () => {
+  const desc = (name: string) => {
+    const t = toolMap.get(name);
+    if (!t) throw new Error(`no tool '${name}'`);
+    return t.description;
+  };
+
+  it("suggest_change advertises all three change types", () => {
+    const d = desc("suggest_change");
+    expect(d).toMatch(/deleteFile/); // removals exist
+    expect(d).toMatch(/several parts/i); // multi-part creates exist
+    expect(d).not.toMatch(/exactly one edit/i); // the stale claim that shipped
+  });
+
+  it("every schema property an agent must choose is discoverable from the description", () => {
+    // deleteFile changes the whole meaning of a call, so it cannot live only in
+    // the property schema, which agents often skim past.
+    const t = toolMap.get("suggest_change")!;
+    const props = Object.keys((t.inputSchema as { properties: Record<string, unknown> }).properties);
+    expect(props).toContain("deleteFile");
+    expect(t.description).toContain("deleteFile");
+  });
+
+  it("sync_code points at suggest_change instead of being the default", () => {
+    // The tool an agent reaches for when it wants to "just fix it" must name
+    // the route that actually delivers work when it cannot push.
+    expect(desc("sync_code")).toMatch(/suggest_change/);
+  });
+
+  it("the replica refusal names the suggestion route, not just a pull request", async () => {
+    const p = await prisma.project.create({ data: { name: "DescRefusal", slug: "desc-refusal-" + Date.now() } });
+    await toolMap.get("sync_code")!.handler(
+      { projectId: p.id, files: [{ path: "src/x.ts", content: "x" }] },
+      ctxOf({ id: "o1", username: "owner-x", role: "owner", status: "approved" }),
+    );
+    const ci = await accounts.registerAccount("refusal-ci");
+    await accounts.approveAccount(ci.account.id, await accounts.getOrCreateOwner());
+    await toolMap.get("set_mirror_mode")!.handler(
+      { projectId: p.id, mode: "replica", writer: "refusal-ci" },
+      ctxOf({ id: "e1", username: "boss", role: "executive", status: "approved" }),
+    );
+    await expect(
+      toolMap.get("sync_code")!.handler(
+        { projectId: p.id, files: [{ path: "src/x.ts", content: "y" }] },
+        ctxOf({ id: "m1", username: "outsider", role: "member", status: "approved" }),
+      ),
+    ).rejects.toThrow(/suggest_change/);
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+});
+
 // The mirror holds ONE version per path and has no merge algorithm, so every
 // guarantee it offers rests on refusing an ambiguous write and on never
 // destroying content without archiving it first. None of that was covered.

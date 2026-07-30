@@ -57,6 +57,63 @@ describe("validateEdits", () => {
   });
 });
 
+describe("literal text handling — code is full of $", () => {
+  // String.replace with a string second argument interprets $$, $&, $' and $`
+  // as substitution patterns. Every one of these silently corrupted applied
+  // content until replaceOnce.
+  it("preserves $-substitution patterns in applied replacements", () => {
+    const base = "a\nb\nc";
+    const edits = [{ before: "b", after: "cost: $$total and $& and $' and $`" }];
+    expect(validateEdits(base, edits).ok).toBe(true);
+    expect(applyEdits(base, edits)).toBe("a\ncost: $$total and $& and $' and $`\nc");
+  });
+
+  it("a later edit can anchor on $-laden text an earlier edit wrote", () => {
+    const base = "one\ntwo";
+    const edits = [
+      { before: "one", after: "cost: $$sum" },
+      { before: "cost: $$sum\ntwo", after: "cost: $$sum\nthree" },
+    ];
+    expect(validateEdits(base, edits).ok).toBe(true);
+    expect(applyEdits(base, edits)).toBe("cost: $$sum\nthree");
+  });
+
+  it("editsFromContents anchors cleanly next to a $$ line", () => {
+    const base = ["l1", "total: $$sum", "l3", "l4", "l5"].join("\n");
+    const edited = ["l1", "total: $$sum", "l3", "l4x", "l5"].join("\n");
+    const plan = editsFromContents(base, edited);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(applyEdits(base, plan.edits)).toBe(edited);
+  });
+});
+
+describe("overlapping anchors", () => {
+  it("counts overlapping occurrences, refusing an anchor that could land in two places", () => {
+    // "x\nx\nx" occurs at offsets 0 AND 2 of "x\nx\nx\nx" — non-overlapping
+    // counting certified it unique and applied at the wrong spot.
+    const v = validateEdits("x\nx\nx\nx", [{ before: "x\nx\nx", after: "y" }]);
+    expect(v.ok).toBe(false);
+    expect(v.checks[0].occurrences).toBe(2);
+  });
+});
+
+describe("insert-after-anchor edits — the double-apply trap", () => {
+  const edits = [{ before: "function foo() {", after: "function foo() {\n  log();" }];
+  const applied = "function foo() {\n  log();\n  return 1;\n}";
+
+  it("looksApplied recognises an applied insertion that keeps its anchor", () => {
+    expect(looksApplied(applied, edits)).toBe(true);
+    expect(looksApplied("function foo() {\n  return 1;\n}", edits)).toBe(false); // not yet applied
+  });
+
+  it("suggestionState refuses to re-apply an applied insertion", () => {
+    // The anchor still validates against the applied file, so stillApplies
+    // must be forced false — otherwise get_suggestion offers DOUBLED content.
+    expect(suggestionState(applied, edits)).toEqual({ kind: "edit", stillApplies: false, applied: true });
+  });
+});
+
 describe("editsFromContents — a working-copy diff becomes anchored edits", () => {
   const lines = (n: number, edits: Record<number, string> = {}) =>
     Array.from({ length: n }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).join("\n");
@@ -144,6 +201,20 @@ describe("create proposals — a file the mirror does not have", () => {
     expect(suggestionState(null, CREATE)).toEqual({ kind: "create", stillApplies: true, applied: false });
     expect(suggestionState("export const NEW = 1;", CREATE)).toEqual({ kind: "create", stillApplies: false, applied: true });
     expect(suggestionState("something else", CREATE)).toEqual({ kind: "create", stillApplies: false, applied: false });
+  });
+
+  it("tolerates the trailing newline a formatter adds to the applied file", () => {
+    expect(suggestionState("export const NEW = 1;\n", CREATE).applied).toBe(true);
+  });
+
+  it("treats filling an EMPTY mirrored file as a create that still applies", () => {
+    expect(suggestionState("", CREATE)).toEqual({ kind: "create", stillApplies: true, applied: false });
+    expect(suggestionState("  \n", CREATE).stillApplies).toBe(true);
+  });
+
+  it("rejects an invisible zero-width body", () => {
+    expect(isCreateEdits([{ before: "", after: "​" }])).toBe(false);
+    expect(isCreateEdits([{ before: "", after: "﻿‍" }])).toBe(false);
   });
 
   it("an ordinary edit against a missing file neither applies nor is applied", () => {

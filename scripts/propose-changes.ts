@@ -19,6 +19,14 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { editsFromContents, MAX_EDIT_CHARS } from "../src/lib/suggest";
 
+// readdirSync's recursive walk needs Node 20.1+; older Nodes silently ignore
+// the option and misreport every nested edit as a local deletion.
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+if (nodeMajor < 20) {
+  console.error(`Node ${process.versions.node} is too old for this script — Node 20+ required.`);
+  process.exit(1);
+}
+
 const argv = process.argv.slice(2);
 const dir = argv[0];
 const flagValue = (name: string) => {
@@ -34,7 +42,27 @@ if (!dir || dir.startsWith("--") || !reason || reason.trim().length < 10) {
 }
 
 type Manifest = { vault: string; projectId: string; projectName: string; files: Record<string, string> };
-const meta: Manifest = JSON.parse(readFileSync(join(dir, ".openvault", "checkout.json"), "utf8"));
+
+// Parsed inside a guard, not at module scope: a missing manifest means "this
+// is not a working copy", which deserves a sentence, not an ENOENT stack. The
+// BOM strip matters too — a checkout.json re-saved by a Windows editor gains
+// one, and this script strips exactly that byte from OPENVAULT_TOKEN already.
+function loadManifest(root: string): Manifest {
+  const metaPath = join(root, ".openvault", "checkout.json");
+  let parsed: Manifest;
+  try {
+    parsed = JSON.parse(readFileSync(metaPath, "utf8").replace(/^﻿/, ""));
+  } catch {
+    console.error(`'${root}' does not look like a checkout-mirror working copy (${metaPath} missing or unreadable). Run scripts/checkout-mirror.ts first.`);
+    process.exit(1);
+  }
+  if (!parsed?.vault || !parsed?.projectId || typeof parsed?.files !== "object" || !parsed.files) {
+    console.error(`${metaPath} is malformed — re-run checkout-mirror to regenerate it.`);
+    process.exit(1);
+  }
+  return parsed;
+}
+const meta = loadManifest(dir);
 const TOKEN = (process.env.OPENVAULT_TOKEN ?? "").replace(/^﻿/, "").trim();
 
 async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
@@ -44,15 +72,19 @@ async function call(name: string, args: Record<string, unknown>): Promise<Record
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-  const json = (await res.json()) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+  const json = (await res.json()) as {
+    error?: { message?: string };
+    result?: { isError?: boolean; content?: Array<{ text?: string }> };
+  };
+  // JSON-RPC errors arrive as HTTP 200 with an `error` member and no result;
+  // without this check a failed call once printed "suggestion undefined" and
+  // counted itself as filed.
+  if (json.error) throw new Error(json.error.message ?? "JSON-RPC error");
   const text = json.result?.content?.[0]?.text ?? "{}";
   if (json.result?.isError) throw new Error(text.slice(0, 300));
   return JSON.parse(text);
 }
 
-// Same text-type filter the mirror itself uses — anything else was never
-// mirrored and cannot be proposed.
-const TEXT = /\.(ts|tsx|js|jsx|mjs|cjs|json|md|txt|css|scss|html|yml|yaml|toml|py|rb|go|rs|java|kt|swift|sh|sql|prisma|graphql)$/i;
 const norm = (s: string) => s.replace(/\r\n/g, "\n");
 
 const walk = (root: string): string[] =>
@@ -67,6 +99,17 @@ const basePaths = new Set(Object.keys(meta.files));
 const results: Array<{ path: string; outcome: string }> = [];
 let filed = 0;
 
+// Re-running propose after a partial failure (or out of habit) must not spam
+// the queue with duplicates: one open suggestion per path is the sane default,
+// and the message tells the author how to supersede it.
+const open = new Map<string, string>();
+try {
+  const existing = await call("list_suggestions", { projectId: meta.projectId, status: "open" });
+  for (const s of existing.suggestions ?? []) if (!open.has(s.path)) open.set(s.path, s.suggestionId);
+} catch {
+  /* older vault without list_suggestions — proceed without dedup */
+}
+
 for (const path of [...new Set([...working, ...basePaths])].sort()) {
   const inBase = basePaths.has(path);
   const inWork = working.has(path);
@@ -76,14 +119,26 @@ for (const path of [...new Set([...working, ...basePaths])].sort()) {
       continue;
     }
     if (!inBase && inWork) {
-      if (!TEXT.test(path)) continue; // never mirrored, not proposable
-      const content = norm(readFileSync(join(dir, path), "utf8"));
+      // Content sniff, not an extension filter: the mirror legitimately holds
+      // Dockerfile, Makefile and .gitignore (sync_code has no extension gate),
+      // and an extension list silently dropped exactly those. Only genuinely
+      // binary content is out — and that is reported, never skipped silently.
+      const raw = readFileSync(join(dir, path));
+      if (raw.includes(0)) {
+        results.push({ path, outcome: "SKIP — binary content; the mirror holds text only" });
+        continue;
+      }
+      const content = norm(raw.toString("utf8"));
       if (!content.trim()) {
         results.push({ path, outcome: "SKIP — empty file" });
         continue;
       }
       if (content.length > MAX_EDIT_CHARS) {
         results.push({ path, outcome: `SKIP — new file over ${MAX_EDIT_CHARS} chars; sync it or split it` });
+        continue;
+      }
+      if (open.has(path)) {
+        results.push({ path, outcome: `SKIP — an open suggestion already covers this path (${open.get(path)}); review or reject it first` });
         continue;
       }
       if (dryRun) {
@@ -109,13 +164,26 @@ for (const path of [...new Set([...working, ...basePaths])].sort()) {
       results.push({ path, outcome: `SKIP — ${plan.reason}` });
       continue;
     }
+    if (open.has(path)) {
+      results.push({ path, outcome: `SKIP — an open suggestion already covers this path (${open.get(path)}); review or reject it first` });
+      continue;
+    }
     if (dryRun) {
       results.push({ path, outcome: `would propose ${plan.edits.length} edit(s)` });
       continue;
     }
-    const r = await call("suggest_change", { projectId: meta.projectId, path, edits: plan.edits, reason, ...(title ? { title: `${title}: ${path}` } : {}) });
+    const r = await call("suggest_change", {
+      projectId: meta.projectId,
+      path,
+      edits: plan.edits,
+      reason,
+      // The checkout-time hash: lets the server flag that the mirror moved
+      // underneath this working copy, at proposal time rather than review time.
+      expectedHash: meta.files[path],
+      ...(title ? { title: `${title}: ${path}` } : {}),
+    });
     filed++;
-    results.push({ path, outcome: `${plan.edits.length} edit(s) -> suggestion ${r.suggestionId}` });
+    results.push({ path, outcome: `${plan.edits.length} edit(s) -> suggestion ${r.suggestionId}${r.warning ? ` — WARNING: ${r.warning}` : ""}` });
   } catch (err) {
     results.push({ path, outcome: `ERROR — ${String((err as Error).message ?? err).slice(0, 200)}` });
   }

@@ -1099,6 +1099,11 @@ export const tools: Tool[] = [
         },
         reason: { type: "string", description: "why this change is needed — required, and kept as a note" },
         title: { type: "string", description: "short label for the review queue" },
+        expectedHash: {
+          type: "string",
+          description:
+            "optional: the mirror hash your working copy was checked out at. If the mirror has moved past it the response carries a warning, so drift is flagged at proposal time instead of surprising the reviewer.",
+        },
         actor: { type: "string", description: "who is proposing (ignored when authenticated)" },
       },
       required: ["projectId", "path", "edits", "reason"],
@@ -1123,23 +1128,34 @@ export const tools: Tool[] = [
       if (!isValidRepoPath(path)) throw new Error("invalid repo path");
 
       const rows = await prisma.codeFile.findMany({ where: { projectId, path }, orderBy: { part: "asc" } });
+      const existingContent = rows.length ? rows.map((r) => r.content).join("") : null;
       const creating = isCreateEdits(edits);
       if (creating) {
-        // A NEW file: nothing to anchor on, so the one edit IS the file.
-        if (rows.length) throw new Error(`'${path}' already exists in the mirror — propose anchored edits to it instead of a new file.`);
+        // A NEW file: nothing to anchor on, so the one edit IS the file. An
+        // EMPTY mirrored file counts as absent here — a placeholder like
+        // __init__.py has no text an ordinary edit could anchor on, so without
+        // this it would be a dead end no proposal could ever grow.
+        if (existingContent !== null && existingContent.trim()) {
+          throw new Error(`'${path}' already exists in the mirror — propose anchored edits to it instead of a new file.`);
+        }
         if (edits[0].after.length > MAX_EDIT_CHARS) throw new Error(`a new-file proposal is capped at ${MAX_EDIT_CHARS} characters`);
-      } else if (!rows.length) {
+      } else if (existingContent === null) {
         throw new Error(
           `'${path}' is not in the code mirror, so there is nothing to anchor a change against. get_code_map to see what is. To propose a NEW file, send exactly one edit with before: "" and the full content as after.`,
         );
       } else {
-        const content = rows.map((r) => r.content).join("");
-        const { checks, ok } = validateEdits(content, edits);
+        const { checks, ok } = validateEdits(existingContent, edits);
         if (!ok) {
           const bad = checks.filter((c) => !c.ok).map((c) => `edit ${c.index + 1}: ${c.reason}`);
           throw new Error(`these edits do not match the file as it stands:\n${bad.join("\n")}`);
         }
       }
+      // An optional watermark from a working-copy checkout: when the mirror has
+      // moved past it, the edits may still anchor — content anchors tolerate
+      // disjoint drift by design — but the proposer should re-read before an
+      // owner reviews a composition neither party saw whole.
+      const expectedHash = typeof (a as { expectedHash?: unknown }).expectedHash === "string" ? ((a as { expectedHash: string }).expectedHash || null) : null;
+      const moved = Boolean(expectedHash && rows[0] && rows[0].hash !== expectedHash);
 
       // The reason becomes a real note, linked to the project's knowledge graph.
       // A pull-request description dies with the pull request; this is the part
@@ -1184,6 +1200,11 @@ export const tools: Tool[] = [
         noteItemId: note.id,
         by: actor,
         note: `Recorded ${creating ? "as a NEW file" : `against ${rows[0]?.ref ?? "the current mirror"}`}. An owner or executive reviews it with review_suggestion; nothing changes in the mirror or in git until they do${project.repoUrl ? `. If you have write access to ${project.repoUrl}, a pull request there is still the better route` : ""}.`,
+        ...(moved
+          ? {
+              warning: `the mirror moved past the version this working copy was based on (${expectedHash!.slice(0, 12)}… → ${rows[0]!.hash.slice(0, 12)}…). Your edits still anchor, but read_code the current file to confirm they compose with the newer changes before the owner reviews.`,
+            }
+          : {}),
       };
     },
   },
@@ -1255,20 +1276,13 @@ export const tools: Tool[] = [
       const st = suggestionState(parts.length ? content : null, edits);
       const blockers = st.stillApplies
         ? []
-        : st.kind === "create"
-          ? [
-              {
-                index: 0,
-                ok: false,
-                occurrences: 0,
-                reason: st.applied
-                  ? "a file with exactly this content already exists — the proposal appears applied"
-                  : "a file now exists at this path with different content",
-              },
-            ]
-          : parts.length
-            ? validateEdits(content, edits).checks.filter((c) => !c.ok)
-            : [{ index: 0, ok: false, occurrences: 0, reason: "the file is no longer in the mirror" }];
+        : st.applied
+          ? [{ index: 0, ok: false, occurrences: 0, reason: "appears already applied — the mirror already holds the proposed result" }]
+          : st.kind === "create"
+            ? [{ index: 0, ok: false, occurrences: 0, reason: "a file now exists at this path with different content" }]
+            : parts.length
+              ? validateEdits(content, edits).checks.filter((c) => !c.ok)
+              : [{ index: 0, ok: false, occurrences: 0, reason: "the file is no longer in the mirror" }];
       const project = await prisma.project.findUnique({ where: { id: s.projectId }, select: { repoUrl: true } });
       return {
         suggestionId: s.id,
@@ -1327,11 +1341,11 @@ export const tools: Tool[] = [
       const st = suggestionState(parts.length ? content : null, edits);
       if (verdict === "approve" && !st.stillApplies) {
         throw new Error(
-          st.kind === "create"
-            ? st.applied
-              ? "a file with exactly this content already exists in the mirror — the proposal appears applied; nothing to approve."
-              : "a different file now exists at this path — ask the author to re-propose anchored edits against it."
-            : "this no longer fits the current file — the code it anchors to has changed since it was proposed. Ask the author to re-propose against the current version.",
+          st.applied
+            ? "this appears already applied — the mirror already holds the proposed result; nothing to approve."
+            : st.kind === "create"
+              ? "a different file now exists at this path — ask the author to re-propose anchored edits against it."
+              : "this no longer fits the current file — the code it anchors to has changed since it was proposed. Ask the author to re-propose against the current version.",
         );
       }
       const updated = await prisma.codeSuggestion.update({

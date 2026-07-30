@@ -35,8 +35,21 @@ function countOccurrences(haystack: string, needle: string): number {
     const at = haystack.indexOf(needle, from);
     if (at === -1) return count;
     count++;
-    from = at + needle.length;
+    // Advance one character, not the needle length: occurrences may OVERLAP
+    // ("x\nx\nx" occurs twice in "x\nx\nx\nx"), and an anchor that could land
+    // in two places must be reported as ambiguous, not certified unique.
+    from = at + 1;
   }
+}
+
+// Replace the first occurrence LITERALLY. String.replace with a string second
+// argument interprets $$, $&, $' and $` as substitution patterns — so applying
+// an edit whose replacement contains a Makefile's $$HOME, a JS "$&" pattern, or
+// LaTeX $$ would silently corrupt the exact text being written, at the exact
+// moment it was being applied.
+function replaceOnce(text: string, needle: string, replacement: string): string {
+  const at = text.indexOf(needle);
+  return at === -1 ? text : text.slice(0, at) + replacement + text.slice(at + needle.length);
 }
 
 export function validateEdits(content: string, edits: Edit[]): { checks: EditCheck[]; ok: boolean } {
@@ -74,7 +87,7 @@ export function validateEdits(content: string, edits: Edit[]): { checks: EditChe
       });
       return;
     }
-    running = running.replace(before, after);
+    running = replaceOnce(running, before, after);
     checks.push({ index, ok: true, occurrences });
   });
   return { checks, ok: checks.every((c) => c.ok) };
@@ -84,7 +97,7 @@ export function validateEdits(content: string, edits: Edit[]): { checks: EditChe
 // validateEdits returned ok.
 export function applyEdits(content: string, edits: Edit[]): string {
   let out = norm(content);
-  for (const e of edits) out = out.replace(norm(e.before), norm(e.after));
+  for (const e of edits) out = replaceOnce(out, norm(e.before), norm(e.after));
   return out;
 }
 
@@ -96,12 +109,21 @@ export function stillApplies(content: string, edits: Edit[]): boolean {
   return validateEdits(content, edits).ok;
 }
 
-// Already in the tree? If every 'after' is present and no 'before' remains, the
-// owner applied this and pushed; CI then mirrored it. Lets a suggestion close
-// itself instead of lingering as open work that is actually finished.
+// Already in the tree? The owner applied this and pushed; CI then mirrored it.
+// Lets a suggestion close itself instead of lingering as open work that is
+// actually finished.
 export function looksApplied(content: string, edits: Edit[]): boolean {
   const c = norm(content);
-  return edits.every((e) => c.includes(norm(e.after)) && !c.includes(norm(e.before)));
+  return edits.every((e) => {
+    const before = norm(e.before);
+    const after = norm(e.after);
+    if (!c.includes(after)) return false;
+    // An insert-after-anchor edit KEEPS its anchor: after contains before, so
+    // the anchor surviving is exactly what applied looks like, not evidence it
+    // was never applied. Only an edit that removes its anchor can use "the
+    // anchor is still there" as proof of unapplied.
+    return after.includes(before) ? true : !c.includes(before);
+  });
 }
 
 // A compact human/agent-readable rendering for review.
@@ -119,8 +141,17 @@ export function renderEdits(path: string, edits: Edit[]): string {
 // A create proposal: the file is not in the mirror, so there is nothing to
 // anchor on. By convention it is exactly one edit whose before is empty and
 // whose after is the entire file content.
+//
+// The content gate strips zero-width characters before trimming: trim() does
+// not remove U+200B/U+200C/U+200D/U+FEFF, so without this an "invisible" file
+// consisting of one zero-width space passes as real content.
 export function isCreateEdits(edits: Edit[]): boolean {
-  return edits.length === 1 && edits[0].before === "" && typeof edits[0].after === "string" && edits[0].after.trim().length > 0;
+  return (
+    edits.length === 1 &&
+    edits[0].before === "" &&
+    typeof edits[0].after === "string" &&
+    edits[0].after.replace(/[\u200B-\u200D\uFEFF]/g, "").trim().length > 0
+  );
 }
 
 // One verdict for every handler that needs to know whether a stored suggestion
@@ -133,11 +164,25 @@ export function suggestionState(
   edits: Edit[],
 ): { kind: "create" | "edit"; stillApplies: boolean; applied: boolean } {
   if (isCreateEdits(edits)) {
-    if (currentContent === null) return { kind: "create", stillApplies: true, applied: false };
-    return { kind: "create", stillApplies: false, applied: norm(currentContent) === norm(edits[0].after) };
+    // An EMPTY mirrored file counts as absent: a placeholder like __init__.py
+    // has no text an ordinary edit could anchor on, so without this the file
+    // could never grow through the suggestion pipeline at all.
+    if (currentContent === null || !norm(currentContent).trim()) {
+      return { kind: "create", stillApplies: true, applied: false };
+    }
+    // Trailing-newline tolerance: a formatter appending "\n" to the applied
+    // file is the near-universal case, and it must read as applied — not as
+    // "a different file now exists".
+    const applied = norm(currentContent).replace(/\n+$/, "") === norm(edits[0].after).replace(/\n+$/, "");
+    return { kind: "create", stillApplies: false, applied };
   }
   if (currentContent === null) return { kind: "edit", stillApplies: false, applied: false };
-  return { kind: "edit", stillApplies: validateEdits(currentContent, edits).ok, applied: looksApplied(currentContent, edits) };
+  const applied = looksApplied(currentContent, edits);
+  // Applied means DONE. An insert-style edit whose anchor survives in the
+  // applied file would still pass validateEdits, and reporting it as
+  // still-appliable invites a second application — which duplicates the
+  // inserted text. Once applied, nothing about this suggestion applies again.
+  return { kind: "edit", stillApplies: applied ? false : validateEdits(currentContent, edits).ok, applied };
 }
 
 // Turn a base/edited pair of file contents into content-anchored edits that
@@ -168,7 +213,12 @@ export function editsFromContents(baseText: string, editedText: string): Proposa
     if (base.length > MAX_EDIT_CHARS || edited.length > MAX_EDIT_CHARS) {
       return { ok: false, reason: "the change is too large or too scattered to anchor as edits; propose it manually in parts" };
     }
-    return { ok: true, edits: [{ before: base, after: edited }] };
+    // The fallback gets the SAME identity guarantee as the hunked path: a plan
+    // is only a plan if applying it reproduces the edited file exactly.
+    const edits: Edit[] = [{ before: base, after: edited }];
+    return validateEdits(base, edits).ok && applyEdits(base, edits) === edited
+      ? { ok: true, edits }
+      : { ok: false, reason: "could not build a verifiable whole-file replacement" };
   };
 
   // Trim the shared head and tail so the LCS runs only over the differing span.

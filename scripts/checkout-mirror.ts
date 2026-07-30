@@ -16,7 +16,8 @@
 // Set OPENVAULT_TOKEN when the vault requires auth. The mirror holds text
 // files only (no binaries, no .env, nothing over the size cap), so a checkout
 // is for reading and editing — not guaranteed to build.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
 const [vaultArg, projectArg, dirArg] = process.argv.slice(2);
@@ -36,7 +37,14 @@ async function call(name: string, args: Record<string, unknown>): Promise<Record
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
   });
   if (!res.ok) throw new Error(`${name}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-  const json = (await res.json()) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+  const json = (await res.json()) as {
+    error?: { message?: string };
+    result?: { isError?: boolean; content?: Array<{ text?: string }> };
+  };
+  // JSON-RPC errors arrive as HTTP 200 with an `error` member and NO result.
+  // Falling back to "{}" here once made this script write the literal string
+  // "undefined" into files while reporting success.
+  if (json.error) throw new Error(`${name}: ${json.error.message ?? "JSON-RPC error"} — is this vault older than the working-copy flow?`);
   const text = json.result?.content?.[0]?.text ?? "{}";
   if (json.result?.isError) throw new Error(`${name}: ${text.slice(0, 300)}`);
   return JSON.parse(text);
@@ -51,12 +59,40 @@ async function main() {
     process.exit(1);
   }
 
+  // A used directory is a trap, twice over: re-checkout would silently
+  // overwrite local edits, and files since deleted from the mirror would
+  // linger on disk for propose-changes to resurrect as NEW.
+  if (existsSync(dirArg) && readdirSync(dirArg).length) {
+    console.error(`'${dirArg}' is not empty. Propose your changes from it first, then check out into a FRESH directory.`);
+    process.exit(1);
+  }
+
   const map = await call("get_code_map", { projectId: project.id });
   if (!map.files?.length) {
     console.error("the mirror is empty — nothing to check out");
     process.exit(1);
   }
   if (map.warning) console.warn(`WARNING: ${map.warning}`);
+
+  // Refuse before writing anything: server-supplied paths must be sane, and
+  // case-colliding paths (Case.md vs case.md) cannot coexist on a
+  // case-insensitive filesystem — last write would silently win for BOTH the
+  // working copy and the base, and propose would then report a phantom
+  // deletion of the loser.
+  const byLower = new Map<string, string>();
+  for (const f of map.files as Array<{ path: string }>) {
+    const segments = f.path.split("/");
+    if (f.path.includes("\\") || /^[A-Za-z]:/.test(f.path) || f.path.startsWith("/") || segments.some((s) => s === ".." || s === "." || !s)) {
+      console.error(`refusing suspicious server-supplied path '${f.path}'`);
+      process.exit(1);
+    }
+    const prev = byLower.get(f.path.toLowerCase());
+    if (prev && prev !== f.path) {
+      console.error(`the mirror holds case-colliding paths '${prev}' and '${f.path}', which cannot coexist on this filesystem. Fix the mirror first (sync_code deletes one of them).`);
+      process.exit(1);
+    }
+    byLower.set(f.path.toLowerCase(), f.path);
+  }
 
   const manifest: Record<string, string> = {};
   let bytes = 0;
@@ -66,9 +102,22 @@ async function main() {
     let offset = 0;
     for (;;) {
       const r = await call("read_code", { projectId: project.id, path: f.path, offset, maxChars: 200_000 });
+      if (typeof r.content !== "string") throw new Error(`read_code returned no content for '${f.path}'`);
       content += r.content;
       if (!r.truncated) break;
+      // Guard against protocol drift: truncated without an advancing
+      // nextOffset would refetch the same window forever.
+      if (typeof r.nextOffset !== "number" || r.nextOffset <= offset) {
+        throw new Error(`read_code says '${f.path}' is truncated but gave no advancing nextOffset — refusing to loop forever`);
+      }
       offset = r.nextOffset;
+    }
+    // The manifest hash is only worth recording if it is TRUE of what we
+    // wrote: a sync landing mid-checkout (or between two windows of one file)
+    // would otherwise leave a base whose recorded hash silently lies.
+    const got = createHash("sha256").update(content).digest("hex");
+    if (got !== f.hash) {
+      throw new Error(`'${f.path}' changed in the mirror while being checked out (hash mismatch) — re-run the checkout`);
     }
     // Two copies: the working file the agent edits, and the pristine base that
     // propose-changes diffs against without another network round trip.
@@ -105,5 +154,9 @@ async function main() {
 
 main().catch((err) => {
   console.error(String(err?.message ?? err));
+  // checkout.json is written last, so a partial tree has no manifest and
+  // propose-changes will refuse it — but it still LOOKS complete to an agent
+  // pointed at the directory. Say so.
+  console.error("checkout incomplete — delete the target directory and retry.");
   process.exit(1);
 });

@@ -418,6 +418,43 @@ describe("code mirror: concurrent writes and recoverability", () => {
     );
   });
 
+  it("allows a create-form proposal to fill an EMPTY mirrored file", async () => {
+    const p = await newProject("sugg8");
+    await sync({ projectId: p.id, files: [{ path: "pkg/__init__.py", content: "" }] });
+    const made = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path: "pkg/__init__.py", edits: [{ before: "", after: "VERSION = '1.0'" }], reason: "Fill the empty placeholder with the version constant." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+    const v = (await toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, exec)) as { status: string };
+    expect(v.status).toBe("approved");
+  });
+
+  it("never offers resultingContent for an already-applied insertion", async () => {
+    const p = await newProject("sugg9");
+    const path = "src/foo.ts";
+    await sync({ projectId: p.id, files: [{ path, content: "function foo() {\n  return 1;\n}" }] });
+    const made = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path, edits: [{ before: "function foo() {", after: "function foo() {\n  log();" }], reason: "Add entry logging to foo for tracing." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+    const exec = ctxOf({ id: "e9", username: "boss", role: "executive", status: "approved" });
+    await toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, exec);
+
+    // The owner applies and pushes; CI mirrors the applied content. The anchor
+    // SURVIVES inside the applied text, so before the fix this suggestion
+    // still validated and get_suggestion offered the doubled content.
+    await sync({ projectId: p.id, files: [{ path, content: "function foo() {\n  log();\n  return 1;\n}" }], force: true });
+    const full = (await toolMap.get("get_suggestion")!.handler({ suggestionId: made.suggestionId, withResult: true })) as {
+      stillApplies: boolean;
+      resultingContent?: string;
+      blockers?: Array<{ reason: string }>;
+    };
+    expect(full.stillApplies).toBe(false);
+    expect(full.resultingContent).toBeUndefined();
+    expect(full.blockers?.[0]?.reason).toMatch(/already applied/);
+  });
+
   it("refuses an ambiguous anchor at proposal time rather than misapplying it later", async () => {
     const p = await newProject("sugg3");
     await sync({ projectId: p.id, files: [{ path: "src/dup.ts", content: "let x = 1;\nlet y = 2;\nlet x = 1;" }] });

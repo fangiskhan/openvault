@@ -11,7 +11,11 @@ export type TemplatedBriefing = {
   scope: string;
   generatedAt: string;
   headline: { rag: Rag; text: string };
-  attention: { itemId: string; title: string; label: string; reason: string; projectName: string }[];
+  attention: { itemId: string; title: string; label: string; reason: string; projectName: string; suggestionId?: string }[];
+  // Proposed code changes awaiting a verdict, carried separately from
+  // `attention` because that list is capped and score-sorted — a proposal must
+  // not fall off the bottom of the one surface that would have surfaced it.
+  pendingReview: { suggestionId: string; title: string; suggestedBy: string; projectName: string }[];
   recentDecisions: { itemId: string; title: string; projectName: string }[];
   recentlyUpdated: { itemId: string; title: string; type: string; projectName: string; updatedAt: string }[];
   coverage: { itemsConsidered: number; projects: number; windowDays: number };
@@ -66,7 +70,16 @@ export async function buildTemplatedBriefing(
       label: s.label,
       reason: s.reason,
       projectName: s.projectName,
+      ...(s.suggestionId ? { suggestionId: s.suggestionId } : {}),
     })),
+    pendingReview: signals
+      .filter((s) => s.kind === "review_pending")
+      .map((s) => ({
+        suggestionId: s.suggestionId!,
+        title: s.title,
+        suggestedBy: s.suggestedBy ?? "someone",
+        projectName: s.projectName,
+      })),
     recentDecisions: decisions,
     recentlyUpdated: recent.slice(0, 6).map((r) => ({
       itemId: r.id,

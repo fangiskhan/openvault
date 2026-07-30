@@ -163,6 +163,112 @@ describe("review gate", () => {
   });
 });
 
+// MCP cannot push, so a proposal nobody looks for is a proposal that never
+// happened — the observed failure was a reviewer applying older work while a
+// full queue sat unread. These pin the surfaces that carry it to an agent
+// that is simply doing its normal session-start reads.
+describe("pending proposals reach an agent without being searched for", () => {
+  const exec = { id: "e-inbox", username: "inbox-boss", role: "executive", status: "approved" };
+  const alice = { id: "a-inbox", username: "alice-dev", role: "member", status: "approved" };
+  const bob = { id: "b-inbox", username: "bob-dev", role: "member", status: "approved" };
+
+  it("get_attention raises an unreviewed proposal, escalating with age", async () => {
+    const p = await prisma.project.create({ data: { name: "AttnSugg", slug: "attn-sugg-" + Date.now() } });
+    await toolMap.get("sync_code")!.handler({ projectId: p.id, files: [{ path: "src/a.ts", content: "x = 1" }] }, ctxOf(alice));
+    const made = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path: "src/a.ts", edits: [{ before: "x = 1", after: "x = 2" }], reason: "Raise the constant, it is too low." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+
+    const signals = (await toolMap.get("get_attention")!.handler({ projectId: p.id })) as Array<{
+      kind: string;
+      suggestionId?: string;
+      suggestedBy?: string;
+      label: string;
+      reason: string;
+    }>;
+    const sig = signals.find((s) => s.kind === "review_pending");
+    expect(sig).toBeTruthy();
+    expect(sig!.suggestionId).toBe(made.suggestionId);
+    expect(sig!.suggestedBy).toBe("bob-dev");
+    expect(sig!.label).toBe("Watch"); // fresh
+    expect(sig!.reason).toMatch(/review_suggestion/); // tells you what to DO
+
+    // Same proposal, three days later: someone has been blocked that long.
+    const { detectSignals } = await import("./attention");
+    const later = new Date(Date.now() + 3 * 86_400_000);
+    const aged = (await detectSignals([p.id], later)).find((s) => s.kind === "review_pending")!;
+    expect(aged.label).toBe("High");
+    expect(aged.reason).toMatch(/3 days ago/);
+
+    // Reviewed proposals stop nagging.
+    await toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, ctxOf(exec));
+    const after = (await toolMap.get("get_attention")!.handler({ projectId: p.id })) as Array<{ kind: string }>;
+    expect(after.some((s) => s.kind === "review_pending")).toBe(false);
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+
+  it("get_briefing carries pendingReview separately, so it cannot fall off the attention list", async () => {
+    const p = await prisma.project.create({ data: { name: "BriefSugg", slug: "brief-sugg-" + Date.now() } });
+    await toolMap.get("sync_code")!.handler({ projectId: p.id, files: [{ path: "src/b.ts", content: "y = 1" }] }, ctxOf(alice));
+    const made = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path: "src/b.ts", edits: [{ before: "y = 1", after: "y = 2" }], reason: "The default is wrong for our workload." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+
+    const brief = (await toolMap.get("get_briefing")!.handler({ projectId: p.id })) as {
+      pendingReview: Array<{ suggestionId: string; suggestedBy: string }>;
+    };
+    expect(brief.pendingReview).toHaveLength(1);
+    expect(brief.pendingReview[0].suggestionId).toBe(made.suggestionId);
+    expect(brief.pendingReview[0].suggestedBy).toBe("bob-dev");
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+
+  it("get_inbox tells a reviewer what awaits them and a proposer what came back", async () => {
+    const p = await prisma.project.create({ data: { name: "InboxSugg", slug: "inbox-sugg-" + Date.now() } });
+    await toolMap.get("sync_code")!.handler({ projectId: p.id, files: [{ path: "src/c.ts", content: "z = 1" }] }, ctxOf(alice));
+    const made = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path: "src/c.ts", edits: [{ before: "z = 1", after: "z = 9" }], reason: "Nine is the value the spec calls for." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+
+    const inbox = toolMap.get("get_inbox")!;
+    // The reviewer sees a queue; the proposer does not see other people's.
+    const boss = (await inbox.handler({}, ctxOf(exec))) as { awaitingYourReview: Array<{ suggestionId: string }>; summary: string };
+    expect(boss.awaitingYourReview.map((x) => x.suggestionId)).toContain(made.suggestionId);
+    expect(boss.summary).toMatch(/awaiting your review/);
+    const bobsFirst = (await inbox.handler({}, ctxOf(bob))) as { awaitingYourReview: unknown[] };
+    expect(bobsFirst.awaitingYourReview).toHaveLength(0);
+
+    // After a verdict, the PROPOSER learns without hunting for the id.
+    await toolMap.get("review_suggestion")!.handler({ suggestionId: made.suggestionId, verdict: "approve" }, ctxOf(exec));
+    const bobsAfter = (await inbox.handler({}, ctxOf(bob))) as {
+      yourProposals: Array<{ suggestionId: string; verdict: string; reviewedBy: string }>;
+      summary: string;
+    };
+    const mine = bobsAfter.yourProposals.find((x) => x.suggestionId === made.suggestionId)!;
+    expect(mine.verdict).toBe("approved");
+    expect(mine.reviewedBy).toBe("inbox-boss");
+    expect(bobsAfter.summary).toMatch(/approved/);
+
+    // A rejection carries the note that says what would fix it.
+    // Anchored on the MIRROR's content (z = 1), not on the approved proposal's
+    // result: approving does not apply, so the mirror has not moved.
+    const made2 = (await toolMap.get("suggest_change")!.handler(
+      { projectId: p.id, path: "src/c.ts", edits: [{ before: "z = 1", after: "z = 99" }], reason: "Going further on the same constant." },
+      ctxOf(bob),
+    )) as { suggestionId: string };
+    await toolMap.get("review_suggestion")!.handler(
+      { suggestionId: made2.suggestionId, verdict: "reject", note: "99 breaks the downstream cap; 9 was right." },
+      ctxOf(exec),
+    );
+    const bobsFinal = (await inbox.handler({}, ctxOf(bob))) as { yourProposals: Array<{ suggestionId: string; reviewNote: string }> };
+    expect(bobsFinal.yourProposals.find((x) => x.suggestionId === made2.suggestionId)!.reviewNote).toMatch(/downstream cap/);
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+});
+
 // A tool's description is the only thing an agent reads to decide what that
 // tool can do. It is as load-bearing as the handler and drifts silently: the
 // suggest_change description still said "exactly one edit" long after

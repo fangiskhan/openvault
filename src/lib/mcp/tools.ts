@@ -145,7 +145,7 @@ export const tools: Tool[] = [
   {
     name: "get_attention",
     description:
-      "List the areas needing attention (overdue, blocked, open risks, due-soon, stale) for a project/scope. Each signal cites the source item id so you can read_item for detail. Cross-project flags raised via flag_issue show up here too.",
+      "List the areas needing attention (overdue, blocked, open risks, due-soon, stale) for a project/scope. Each signal cites the source item id so you can read_item for detail. Cross-project flags raised via flag_issue show up here too, as do code changes proposed via suggest_change and still awaiting a verdict (kind 'review_pending', carrying suggestionId — those escalate the longer they wait, because someone is blocked on your answer).",
     inputSchema: {
       type: "object",
       properties: { projectId: { type: "string" }, scope: scopeProp },
@@ -411,15 +411,88 @@ export const tools: Tool[] = [
   },
   {
     name: "get_inbox",
-    description: "List open items addressed to YOU — cross-project flags and info requests assigned to your account. Requires an approved identity.",
+    description:
+      "Everything waiting on YOU: cross-project flags and info requests assigned to your account, code suggestions awaiting your review (owner/executive), and verdicts on proposals YOU filed — approved ones you still need to apply, rejected ones with the reviewer's note. Call it at the start of a session; nothing here pushes, so an unread verdict stays unread until someone looks. Requires an approved identity.",
     inputSchema: { type: "object", properties: {} },
     handler: async (_a, ctx) => {
-      if (!ctx?.account) throw new Error("no identity — connect with your approved account token to use get_inbox");
-      return prisma.item.findMany({
-        where: { assigneeAccountId: ctx.account.id, closedAt: null },
-        orderBy: { createdAt: "desc" },
-        select: { id: true, projectId: true, type: true, status: true, title: true, createdAt: true },
-      });
+      const me = ctx?.account;
+      if (!me) throw new Error("no identity — connect with your approved account token to use get_inbox");
+
+      const isApprover = me.status === "approved" && (me.role === "owner" || me.role === "executive");
+      const [assigned, toReview, mine] = await Promise.all([
+        prisma.item.findMany({
+          where: { assigneeAccountId: me.id, closedAt: null },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, projectId: true, type: true, status: true, title: true, createdAt: true },
+        }),
+        // Proposals YOU can act on. Only approvers see this queue, because for
+        // anyone else it is not actionable and would just be noise.
+        isApprover
+          ? prisma.codeSuggestion.findMany({
+              where: { status: "open" },
+              orderBy: { createdAt: "asc" },
+              take: 25,
+              select: { id: true, projectId: true, path: true, title: true, suggestedBy: true, createdAt: true, project: { select: { name: true } } },
+            })
+          : Promise.resolve([]),
+        // Verdicts on what you proposed. Approved is not the end of your job —
+        // someone still has to apply it — and a rejection carries the note that
+        // says what would make it acceptable. Both were previously invisible
+        // unless you thought to go looking for your own suggestion by id.
+        prisma.codeSuggestion.findMany({
+          where: { suggestedBy: me.username, status: { in: ["approved", "rejected"] } },
+          orderBy: { updatedAt: "desc" },
+          take: 25,
+          select: {
+            id: true,
+            projectId: true,
+            path: true,
+            title: true,
+            status: true,
+            reviewedBy: true,
+            reviewNote: true,
+            updatedAt: true,
+            project: { select: { name: true } },
+          },
+        }),
+      ]);
+
+      const awaitingYourReview = toReview.map((s) => ({
+        suggestionId: s.id,
+        projectId: s.projectId,
+        project: s.project.name,
+        path: s.path,
+        title: s.title ?? `Change to ${s.path}`,
+        suggestedBy: s.suggestedBy,
+        waitingSince: s.createdAt,
+      }));
+      const yourProposals = mine.map((s) => ({
+        suggestionId: s.id,
+        projectId: s.projectId,
+        project: s.project.name,
+        path: s.path,
+        title: s.title ?? `Change to ${s.path}`,
+        verdict: s.status,
+        reviewedBy: s.reviewedBy,
+        reviewNote: s.reviewNote,
+        reviewedAt: s.updatedAt,
+      }));
+      const approvedUnapplied = yourProposals.filter((p) => p.verdict === "approved").length;
+
+      return {
+        you: me.username,
+        assigned,
+        awaitingYourReview,
+        yourProposals,
+        summary:
+          [
+            assigned.length ? `${assigned.length} item(s) assigned to you` : "",
+            awaitingYourReview.length ? `${awaitingYourReview.length} proposal(s) awaiting your review — review_suggestion` : "",
+            approvedUnapplied ? `${approvedUnapplied} of your proposals approved — get_suggestion { withResult: true } and apply them` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ") || "Nothing waiting on you.",
+      };
     },
   },
   {

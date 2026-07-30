@@ -39,9 +39,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
     // agent must meet the queue at session start, not after thinking to ask.
     prisma.codeSuggestion.findMany({
       where: { projectId, status: "open" },
-      orderBy: { createdAt: "desc" },
+      // Oldest first: the one that has waited longest is the one someone has
+      // been blocked on longest, and it must not be pushed off by newer ones.
+      orderBy: { createdAt: "asc" },
       take: 10,
-      select: { id: true, path: true, title: true, suggestedBy: true },
+      select: { id: true, path: true, title: true, suggestedBy: true, createdAt: true },
     }),
   ]);
 
@@ -64,9 +66,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
     lines.push("");
   }
   if (suggestions.length) {
-    lines.push("## Open code suggestions (proposed changes awaiting review)");
-    for (const s of suggestions) lines.push(`- ${s.title ?? s.path} — by ${s.suggestedBy} (${s.id})`);
-    lines.push("(list_suggestions for staleness, get_suggestion for the edits; review_suggestion to approve/reject if you act for an owner/executive)");
+    lines.push(`## Open code suggestions — ${suggestions.length} awaiting review`);
+    for (const s of suggestions) {
+      const days = Math.floor((Date.now() - s.createdAt.getTime()) / 86_400_000);
+      const waited = days >= 1 ? ` — waiting ${days} day${days === 1 ? "" : "s"}` : "";
+      lines.push(`- ${s.title ?? s.path} — by ${s.suggestedBy}${waited} (${s.id})`);
+    }
+    lines.push("(get_suggestion for the edits; review_suggestion to approve/reject if you act for an owner/executive)");
     lines.push("");
   }
   if (b.recentlyUpdated.length) {

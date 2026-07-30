@@ -1,6 +1,6 @@
 import { prisma } from "./db";
 
-export type SignalKind = "overdue_blocker" | "open_risk" | "blocker" | "overdue" | "due_soon" | "stale";
+export type SignalKind = "overdue_blocker" | "open_risk" | "blocker" | "overdue" | "due_soon" | "stale" | "review_pending";
 
 export type Signal = {
   kind: SignalKind;
@@ -15,6 +15,10 @@ export type Signal = {
   score: number;
   label: "Critical" | "High" | "Watch";
   reason: string;
+  // Present only on review_pending: the proposal to act on, and who is waiting.
+  // itemId points at its reason note, which is a different object.
+  suggestionId?: string;
+  suggestedBy?: string;
 };
 
 // The fields the rules look at — kept separate from the DB row so the rules are
@@ -63,6 +67,61 @@ export function classify(it: ClassifyInput, now: Date): { kind: SignalKind; scor
   return null;
 }
 
+// How long an unreviewed proposal waits before it counts as neglected rather
+// than merely new. Below this it is still "Watch"; past it, someone is blocked
+// on a verdict that isn't coming.
+const REVIEW_STALE_DAYS = 2;
+
+// Proposed code changes waiting on a human verdict, as attention signals.
+//
+// MCP cannot push, so a suggestion nobody looks for is a suggestion that never
+// happened — the observed failure was a reviewer applying older work while a
+// full queue sat unread. Attention is the surface an agent already checks to
+// answer "what needs me?", and a proposal awaiting review is exactly that.
+// Cites suggestionId (not an itemId) because the reviewable object IS the
+// suggestion; itemId points at its reason note so read_item still works.
+async function suggestionSignals(projectIds: string[], now: Date): Promise<Signal[]> {
+  const open = await prisma.codeSuggestion.findMany({
+    where: { projectId: { in: projectIds }, status: "open" },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      projectId: true,
+      path: true,
+      title: true,
+      suggestedBy: true,
+      noteItemId: true,
+      createdAt: true,
+      project: { select: { name: true, color: true } },
+    },
+  });
+
+  return open.map((s) => {
+    const waitedDays = Math.floor((now.getTime() - s.createdAt.getTime()) / DAY);
+    const stale = waitedDays >= REVIEW_STALE_DAYS;
+    return {
+      kind: "review_pending" as const,
+      // Scored to sit above stale chores but below a live blocker: nobody is
+      // broken, but a person IS waiting, and the wait is the thing that grows.
+      score: stale ? 60 : 40,
+      reason: stale
+        ? `Proposed by ${s.suggestedBy} ${waitedDays} days ago — still unreviewed (review_suggestion)`
+        : `Proposed by ${s.suggestedBy} — awaiting review (review_suggestion)`,
+      label: labelFor(stale ? 60 : 40),
+      itemId: s.noteItemId ?? s.id,
+      suggestionId: s.id,
+      suggestedBy: s.suggestedBy,
+      projectId: s.projectId,
+      projectName: s.project.name,
+      projectColor: s.project.color,
+      title: s.title ?? `Change to ${s.path}`,
+      type: "suggestion",
+      status: "open",
+      dueAt: null,
+    };
+  });
+}
+
 // Detect "areas needing attention" across the given projects. Every signal
 // points at a real item the caller can open.
 export async function detectSignals(projectIds: string[], now: Date = new Date()): Promise<Signal[]> {
@@ -103,6 +162,7 @@ export async function detectSignals(projectIds: string[], now: Date = new Date()
     });
   }
 
+  signals.push(...(await suggestionSignals(projectIds, now)));
   signals.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
   return signals;
 }

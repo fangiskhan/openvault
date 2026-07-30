@@ -548,10 +548,14 @@ Not connected? \`claude mcp add openvault ${base}/api/mcp --transport http --sco
   cover what you're about to do — and if you work for the project's owner,
   pending ones are waiting on your review.
 
-## Changing code you cannot push yourself
+## Changing code you cannot push yourself — SUGGEST, don't fix
 
 If you have no git access here, or the mirror is a replica (sync_code will
-refuse you and say so): propose the change instead of writing it.
+refuse you and say so): your deliverable IS a suggestion in the queue. Not a
+note describing the fix, not prose telling the owner what to run, not an
+explanation of what you would do if you could — work the owner has to
+reconstruct from prose is undelivered work. If you catch yourself writing
+"change X to Y" anywhere outside \`suggest_change\`, stop and file it.
 
 - \`suggest_change\` takes content-anchored edits — the EXACT text to replace
   and what it becomes, never line numbers. For a NEW file, send edits with

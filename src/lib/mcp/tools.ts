@@ -588,7 +588,7 @@ export const tools: Tool[] = [
       // and silently losing it — impossible rather than merely recoverable.
       if (project.mirrorMode === "replica" && actor !== project.mirrorWriter) {
         throw new Error(
-          `this project's mirror is a read-only replica of git, synced by '${project.mirrorWriter ?? "CI"}' on push to the default branch. Nothing written here would survive the next sync, and it would not be in any commit. Open a PR instead; the mirror follows once it merges.`,
+          `this project's mirror is a read-only replica of git, synced by '${project.mirrorWriter ?? "CI"}' on push to the default branch. Nothing written here would survive the next sync, and it would not be in any commit. PROPOSE your change instead: suggest_change with anchored edits (before:'' parts for a new file, deleteFile:true for a removal) puts it in the owner's review queue, and approval hands them the result to apply and push — the mirror follows. If you have push access to the repo, a PR is the other route.`,
         );
       }
       if (!Array.isArray(files) || files.length > MAX_SYNC_FILES) {
@@ -1049,7 +1049,9 @@ export const tools: Tool[] = [
       if (proj?.mirrorMode === "replica") {
         // Restoring into a derived mirror would put back a version git does not
         // have at HEAD, recreating the exact drift replica mode exists to end.
-        throw new Error("this mirror is a replica of git — git is its history. Use git revert/checkout, and the mirror follows on the next sync.");
+        throw new Error(
+          "this mirror is a replica of git — git is its history. If you can push: git revert/checkout, and the mirror follows on the next sync. If you cannot: suggest_change with the old content as anchored edits puts the restore in the owner's review queue.",
+        );
       }
       const version = await prisma.codeVersion.findUnique({ where: { id: versionId } });
       if (!version || version.projectId !== projectId) throw new Error("version not found on this project (use get_code_history)");

@@ -170,7 +170,7 @@ Measured against this project's own live vault — 116 mirrored files, 28 notes 
 | Question | Without the vault | With the vault |
 | --- | --- | --- |
 | What's the state of this project? | Re-explore the repo and history each cold start (est. 20-50k tokens) | 438-token briefing, injected by the hook |
-| What changed in the code? | Read the mirror's contents: 268,326 tokens | `get_code_map`: 8,066 tokens. 33x cheaper. |
+| *Which files* changed in the code? | Read the mirror's contents: 268,326 tokens | `get_code_map`: 8,066 tokens of paths, sizes and content hashes — then read only what moved |
 | What happened this week? | Scroll transcripts | 7-day `get_recent_activity` digest: 4,994 tokens |
 | What did we decide about X? | Re-read history | One `search` plus the note it cites: 2,683 tokens |
 
@@ -179,7 +179,9 @@ The briefing costs zero LLM tokens to produce (templated rules) and the inferred
 Fine print, because a table of numbers invites more trust than it has earned:
 
 - Connecting the MCP server loads 47 tool schemas into every session — a measured 7,366 tokens of overhead, paid whether or not a tool is called. Two avoided file-reads repay it.
-- The code-map ratio is a function of average file size, not a constant. It was 14x when the mirror held 89 smaller files and is 33x at 116; a repo of many tiny files would score worse.
+- **The code-map ratio is not a general discount, and it is the row most likely to be misread.** `get_code_map` returns paths, hashes and sizes — *no source*. It makes **detecting** change cheap; it does not compress code. A task that genuinely requires reading 250k tokens of source still costs 250k. Measured on this repo: 66 of its 117 files changed in the last seven days, and reading those is 249,660 tokens against 268,326 for everything — so on "what changed this week", the map's saving on the *reading* is close to nothing. Its saving is on the *search*: 8,066 tokens tells you exactly which files differ, by hash, with no false positives.
+- The ratio is also a function of average file size rather than a constant — it was 14x when the mirror held 89 smaller files. A repo of many tiny files would score worse.
+- **The savings that actually compound are the notes, not the mirror.** A 438-token briefing answers "where is this project" without re-deriving it, and one `search` plus its cited note (2,683 tokens) answers "why did we decide X" without re-reading the history that produced it. That is compression of *conclusions*, deliberately lossy, and it is where the leverage is.
 - The activity digest scales with how much actually happened, so it is the least stable row here. The same call on the same vault measured 1,253 tokens at an earlier point in this project's life.
 - The whole-mirror figure is the sum of stored file sizes, so it *understates* the real cost — reading those files through `read_code` also pays per-call envelope and headers.
 - Savings depend on the agent asking the vault before grepping; the connect-kit `CLAUDE.md` instructs it to. On very large vaults, prefer `topLinked` and `get_links` over a full `get_graph`.

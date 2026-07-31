@@ -187,6 +187,34 @@ Fine print, because a table of numbers invites more trust than it has earned:
 - Savings depend on the agent asking the vault before grepping; the connect-kit `CLAUDE.md` instructs it to. On very large vaults, prefer `topLinked` and `get_links` over a full `get_graph`.
 - The cold-start row is the one estimate left in the table. Instrumented side-by-side agent sessions are future work.
 
+## Benchmark: the same question, with and without the vault
+
+`node scripts/benchmark-retrieval.mjs` asks four real questions about this repo and measures what it costs to answer each one **from the vault** versus **from the code**, then checks whether the retrieved bytes actually contain the answer.
+
+**The method**, stated because a benchmark whose rules are hidden is a marketing claim:
+
+- **With vault** — one `search`, then `read_item` on the top hit and up to two notes it wikilinks. Not "read the whole vault".
+- **Without vault** — grep the repo for the question's key terms, then read around the hits. Reported as a *range*, because the result depends entirely on how well the agent guesses: **best case** is grep output plus one read window in the file grep hit hardest; **worst case** is a window at every match in every file. The truth is in between and I refuse to pick a point in it, because picking one is how you tune a benchmark to the answer you want.
+- **Corpus** — `git ls-files`, not a directory walk. An early run was dominated by `tsconfig.tsbuildinfo`, a 250 KB build artifact stored as one line, where a single grep hit produced a 62,000-token "window". The benchmark script also excludes itself, since it contains the very terms it greps for.
+- **Coverage** — each question declares terms any correct answer must contain, checked mechanically against what each side retrieved. Choosing those terms is the one judgement call left, and it is in the source.
+
+| Question | With vault | Without (best..worst) | Answer present? |
+| --- | --- | --- | --- |
+| Why promote from claude-mem instead of capturing sessions automatically? | 3,304 | 986 .. 986 | vault 3/3, **code 1/3** |
+| How is a Claude Code project's history turned into notes? | 2,630 | **1,272** .. 4,283 | vault 2/3, **code 3/3** |
+| Why does the vault never write to git? | 3,404 | 8,250 .. 29,682 | vault 3/3, code 3/3 |
+| What exactly does `get_code_map` return? | 3,479 | 4,482 .. 30,154 | vault 3/3, code 3/3 |
+
+**The vault loses two of these four, and that is the point.**
+
+- **Row 2 it loses outright** — cheaper *and* more complete from the code. Correct: "how does this work" is a question the source answers definitively, and a note about it is a stale copy waiting to happen.
+- **Row 1 it wins by not being comparable.** The cold path is 3.4x cheaper and returns almost nothing: `claude-mem` appears **nowhere** in the tracked source, nor do the rejected alternatives, the scoring, or the constraint that Vercel cannot read a developer's local store. Grep's two hits for "automatic capture" are a *different* feature — a PostToolUse activity hook — so the cheap path is not merely incomplete, it is actively misleading. Spending 986 tokens to be pointed at the wrong subsystem is not a saving.
+- **Rows 3 and 4 are the honest middle**: the vault is 1.3–2.4x cheaper in the cold path's best case, and both sides reach the answer.
+
+The shape of the result is the finding: **the vault wins on *why* and loses on *how*.** Decisions, rejected alternatives and the reasoning behind a constraint are never in the source, because code records what was built and not what was considered and discarded. Implementation detail always is. A vault that tries to duplicate the second category earns stale notes; one that captures the first is holding the only copy.
+
+Caveat worth stating plainly: this measures **retrieval** cost — bytes that must enter context — not end-to-end agent cost. It excludes the model's own reasoning tokens and the number of turns taken. Measuring those honestly needs API-level usage accounting rather than an agent's self-report, and that is still future work.
+
 ## Accounts: the team walkthrough
 
 1. Sign in with `APP_PASSWORD` and open Accounts.

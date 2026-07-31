@@ -45,5 +45,17 @@ export async function saveBlob(key: string, data: Buffer, contentType: string): 
 }
 
 export async function readBlob(key: string): Promise<Buffer> {
+  // Must mirror saveBlob's driver split. It did not: reads always hit local
+  // disk, so every file stored in Vercel Blob was write-only — uploadable in
+  // production and impossible to get back.
+  if (process.env.STORAGE_DRIVER === "vercel") {
+    const { head } = await import("@vercel/blob").catch(() => {
+      throw new Error("STORAGE_DRIVER=vercel requires the @vercel/blob package");
+    });
+    const meta = await head(key, { token: process.env.BLOB_READ_WRITE_TOKEN });
+    const res = await fetch(meta.url);
+    if (!res.ok) throw new Error(`blob fetch failed: HTTP ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
   return fs.readFile(resolveUnderRoot(key));
 }

@@ -12,6 +12,12 @@ import { reviewWorkIntent } from "../work";
 import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
+import { IMAGE_EXT } from "../extract";
+import { readBlob } from "../storage";
+
+// An inlined image is base64 in the agent's context window; past this the cost
+// outweighs the answer, so read_file hands back a download path instead.
+const MAX_INLINE_IMAGE_BYTES = 1_500_000;
 import { diffHunks, type Hunk } from "../diff";
 import { validateEdits, applyEdits, suggestionState, isCreateEdits, isDeleteEdits, createContent, DELETE_SENTINEL, renderEdits, MAX_EDITS, MAX_EDIT_CHARS, type Edit } from "../suggest";
 
@@ -211,6 +217,90 @@ export const tools: Tool[] = [
       });
       if (!it) throw new Error("item not found");
       return it;
+    },
+  },
+  {
+    name: "list_files",
+    description:
+      "Documents, spreadsheets and images uploaded to a project: filename, type, size, and the item holding their extracted text. Uploads are searchable by their CONTENT (a PDF's text is in its item body), so `search` finds them too — this is for browsing what exists.",
+    inputSchema: {
+      type: "object",
+      properties: { projectId: { type: "string" } },
+      required: ["projectId"],
+    },
+    handler: async (a) => {
+      const { projectId } = a as { projectId: string };
+      const files = await prisma.fileAsset.findMany({
+        where: { projectId },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        select: { id: true, filename: true, mimeType: true, size: true, itemId: true, createdAt: true },
+      });
+      return {
+        files: files.map((f) => ({ ...f, sizeKb: Math.round(f.size / 1024) })),
+        hint: "read_file returns a document's text, or an image you can actually look at.",
+      };
+    },
+  },
+  {
+    name: "read_file",
+    description:
+      "Read an uploaded file. Documents return their extracted text; IMAGES return the picture itself, so you can look at a screenshot or diagram rather than being told about one. Large images are refused with their download URL instead of flooding your context.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "from list_files" },
+        maxChars: { type: "number", description: "cap on returned text (default 60000)" },
+      },
+      required: ["fileId"],
+    },
+    handler: async (a) => {
+      const { fileId, maxChars } = a as { fileId: string; maxChars?: number };
+      const f = await prisma.fileAsset.findUnique({
+        where: { id: fileId },
+        select: { id: true, projectId: true, filename: true, mimeType: true, size: true, storageKey: true, itemId: true },
+      });
+      if (!f) throw new Error("file not found (use list_files)");
+
+      const isImage = IMAGE_EXT.test(f.filename);
+      if (isImage) {
+        // Base64 inflates by ~4/3 and every byte lands in the agent's context,
+        // so a phone photo would cost more than the answer is worth.
+        if (f.size > MAX_INLINE_IMAGE_BYTES) {
+          return {
+            fileId: f.id,
+            filename: f.filename,
+            sizeKb: Math.round(f.size / 1024),
+            tooLargeToInline: true,
+            downloadPath: `/api/files/${f.id}`,
+            hint: `this image is ${Math.round(f.size / 1024)} KB; inlining is capped at ${Math.round(MAX_INLINE_IMAGE_BYTES / 1024)} KB. Fetch the path above if you can, or ask for a smaller version.`,
+          };
+        }
+        const data = await readBlob(f.storageKey);
+        const mime = f.mimeType && f.mimeType.startsWith("image/") ? f.mimeType : `image/${(f.filename.split(".").pop() ?? "png").toLowerCase().replace("jpg", "jpeg")}`;
+        // Content blocks, not JSON: this is what makes the image visible.
+        return {
+          _mcpContent: [
+            { type: "text", text: `${f.filename} (${Math.round(f.size / 1024)} KB)` },
+            { type: "image", data: data.toString("base64"), mimeType: mime },
+          ],
+        };
+      }
+
+      // Non-images: the extracted text already lives on the item, so serve
+      // that rather than re-parsing the blob on every read.
+      const item = f.itemId ? await prisma.item.findUnique({ where: { id: f.itemId }, select: { body: true } }) : null;
+      const cap = Math.max(1, Math.min(Number(maxChars) || 60_000, 200_000));
+      const text = item?.body ?? "";
+      return {
+        fileId: f.id,
+        filename: f.filename,
+        sizeKb: Math.round(f.size / 1024),
+        itemId: f.itemId,
+        content: text.slice(0, cap),
+        truncated: text.length > cap,
+        downloadPath: `/api/files/${f.id}`,
+      };
     },
   },
   {

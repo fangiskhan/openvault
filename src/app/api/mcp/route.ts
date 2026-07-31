@@ -148,6 +148,13 @@ export async function POST(req: Request) {
       }
       try {
         const out = await tool.handler(args, ctx);
+        // Most tools return data, which is serialised as one text block. A tool
+        // may instead return ready-made MCP content blocks — the only way to
+        // hand an agent an IMAGE it can actually look at, rather than a
+        // paragraph describing one.
+        if (out && typeof out === "object" && Array.isArray((out as { _mcpContent?: unknown[] })._mcpContent)) {
+          return result(id, { content: (out as { _mcpContent: unknown[] })._mcpContent });
+        }
         return result(id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
       } catch (e) {
         return result(id, {

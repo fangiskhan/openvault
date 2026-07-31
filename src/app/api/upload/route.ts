@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
-import { saveBlob, safeStorageName } from "@/lib/storage";
+import { saveBlob, safeStorageName, storageDriver } from "@/lib/storage";
 import { actorFor } from "@/lib/actor";
 import { parseSpreadsheet } from "@/lib/spreadsheet";
 import { extractFile, SHEET_EXT } from "@/lib/extract";
@@ -42,7 +42,14 @@ export async function POST(req: Request) {
   if (buf.length > MAX_UPLOAD_BYTES) return badRequest("file too large (max 25 MB)");
   const isSheet = SHEET_EXT.test(file.name);
   const storageKey = `${projectId}/${Date.now()}-${safeStorageName(file.name)}`;
-  await saveBlob(storageKey, buf, file.type || "application/octet-stream");
+  try {
+    await saveBlob(storageKey, buf, file.type || "application/octet-stream");
+  } catch (e) {
+    // Storage failures were surfacing as an unexplained 500. The driver knows
+    // exactly what went wrong — a size cap, a missing token, a read-only disk
+    // — so say that instead.
+    return badRequest(`could not store the file: ${(e as Error).message}`);
+  }
 
   let type = "file";
   let body = `Uploaded file **${file.name}**.`;
@@ -81,6 +88,9 @@ export async function POST(req: Request) {
       mimeType: file.type || "",
       size: buf.length,
       storageKey,
+      // With the db driver the row IS the storage; saveBlob above only
+      // validated the size. Other drivers already wrote the bytes elsewhere.
+      ...(storageDriver() === "db" ? { data: buf } : {}),
     },
   });
   await syncItemLinks(item.id, projectId, body);

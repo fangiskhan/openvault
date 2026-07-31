@@ -282,6 +282,16 @@ model FileAsset {
   mimeType   String
   size       Int
   storageKey String
+  // The bytes themselves, when the "db" storage driver is in use.
+  //
+  // A serverless deployment has a read-only filesystem, so the local-disk
+  // driver cannot work there and uploads failed with an unexplained 500 —
+  // making the whole feature self-host-only unless someone provisioned a blob
+  // store first. Keeping modest files in the database removes that setup step
+  // entirely: it is one fewer service, it is included in db:backup and JSON
+  // export for free, and it is deleted with its project by the same cascade.
+  // Large files still belong in object storage; DB_BLOB_MAX_BYTES is the line.
+  data       Bytes?
   createdAt  DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)

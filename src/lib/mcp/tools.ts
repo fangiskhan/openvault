@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import crypto from "node:crypto";
 import { prisma } from "../db";
 import { detectSignals } from "../attention";
 import { rollup, rollupConnected, rollupMany } from "../status";
@@ -12,12 +13,16 @@ import { reviewWorkIntent } from "../work";
 import { searchItems, snippet } from "../search";
 import { validateSkillName, toSkillMarkdown, MAX_SKILL_BODY } from "../skills";
 import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related";
-import { IMAGE_EXT } from "../extract";
-import { readBlob } from "../storage";
+import { IMAGE_EXT, extractFile } from "../extract";
+import { readBlob, saveBlob, safeStorageName, storageDriver } from "../storage";
 
 // An inlined image is base64 in the agent's context window; past this the cost
 // outweighs the answer, so read_file hands back a download path instead.
 const MAX_INLINE_IMAGE_BYTES = 1_500_000;
+
+// A tool argument travels as JSON in one request, and base64 inflates by ~4/3.
+// Larger files belong on the HTTP upload route, which streams multipart.
+const MAX_TOOL_UPLOAD_BYTES = 4_000_000;
 import { diffHunks, type Hunk } from "../diff";
 import { validateEdits, applyEdits, suggestionState, isCreateEdits, isDeleteEdits, createContent, DELETE_SENTINEL, renderEdits, MAX_EDITS, MAX_EDIT_CHARS, type Edit } from "../suggest";
 
@@ -217,6 +222,112 @@ export const tools: Tool[] = [
       });
       if (!it) throw new Error("item not found");
       return it;
+    },
+  },
+  {
+    name: "upload_file",
+    description:
+      "Put a file INTO the vault from base64 — a screenshot, a diagram, a design asset, a document — so other people's agents can find it, read it, and fetch the bytes. Use it when the file already exists on your disk: read it, base64 it, send it. You cannot use this for an image that only exists in your conversation; a model cannot reproduce the bytes of a picture it was shown, and a re-encoded guess is a corrupt file. Documents have their text extracted and become searchable; images record their real dimensions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        filename: { type: "string", description: "with extension — it decides how the content is read" },
+        contentBase64: { type: "string", description: "the file's bytes, base64-encoded" },
+        sha256: {
+          type: "string",
+          description:
+            "optional but recommended: sha256 of the ORIGINAL file. A truncated payload can still be valid base64 of a smaller file, so this is the only way to know the bytes arrived intact.",
+        },
+        actor: { type: "string", description: "who is uploading (ignored when authenticated)" },
+      },
+      required: ["projectId", "filename", "contentBase64"],
+    },
+    handler: async (a, ctx) => {
+      const { projectId, filename, contentBase64 } = a as { projectId: string; filename: string; contentBase64: string };
+      const actor = actorOf(ctx, (a as { actor?: unknown }).actor);
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+      if (!project) throw new Error("project not found (use list_projects)");
+      const clean = safeStorageName(filename);
+      if (!clean || !clean.includes(".")) throw new Error("filename needs an extension — it decides how the file is read");
+
+      // Node's base64 decoder is silently lenient: it discards characters it
+      // does not recognise and accepts a length that cannot be valid, so a
+      // mangled payload becomes a shorter file instead of an error. Validate
+      // the encoding itself before trusting the bytes.
+      const payload = contentBase64.replace(/\s/g, "");
+      if (!payload) throw new Error("contentBase64 is empty");
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(payload)) {
+        throw new Error("contentBase64 contains characters that are not base64 — send the raw encoding, not a data: URI or JSON string");
+      }
+      if (payload.length % 4 !== 0) {
+        throw new Error(`contentBase64 is ${payload.length} characters, which is not a whole number of base64 groups — the payload is truncated`);
+      }
+      const buf = Buffer.from(payload, "base64");
+      if (!buf.length) throw new Error("decoded to zero bytes — check the base64 payload");
+      // A payload can be truncated on a 4-character boundary and still be
+      // perfectly valid base64 of a SHORTER file — indistinguishable from a
+      // small file unless the caller says how big it should be. sha256 is the
+      // only way to actually know, so it is offered and checked when given.
+      const expectSha = (a as { sha256?: unknown }).sha256;
+      if (typeof expectSha === "string" && expectSha) {
+        const got = crypto.createHash("sha256").update(buf).digest("hex");
+        if (got.toLowerCase() !== expectSha.toLowerCase()) {
+          throw new Error(`sha256 mismatch: expected ${expectSha.slice(0, 16)}…, got ${got.slice(0, 16)}… — the payload did not arrive intact`);
+        }
+      }
+      if (buf.length > MAX_TOOL_UPLOAD_BYTES) {
+        throw new Error(
+          `${(buf.length / 1024 / 1024).toFixed(1)} MB is too large to send as a tool argument (cap ${(MAX_TOOL_UPLOAD_BYTES / 1024 / 1024).toFixed(1)} MB) — POST it to /api/upload instead.`,
+        );
+      }
+
+      const storageKey = `${projectId}/${Date.now()}-${clean}`;
+      await saveBlob(storageKey, buf, "application/octet-stream");
+
+      const ex = extractFile(clean, buf);
+      const type = ex.kind === "image" ? "image" : ex.kind === "binary" ? "file" : "document";
+      const item = await prisma.item.create({
+        data: {
+          projectId,
+          type,
+          source: "mcp",
+          title: clean,
+          body: ex.text ? `**${clean}** — extracted text:\n\n${ex.text}` : `**${clean}** — ${ex.note ?? "no text could be extracted"}.`,
+          metadata: JSON.stringify({ actor, via: "mcp", extract: { kind: ex.kind, ...(ex.meta ?? {}) } }),
+          createdBy: actor,
+          updatedBy: actor,
+        },
+        select: { id: true },
+      });
+      const asset = await prisma.fileAsset.create({
+        data: {
+          projectId,
+          itemId: item.id,
+          filename: clean,
+          mimeType: "",
+          size: buf.length,
+          storageKey,
+          // Uint8Array, not Buffer: Prisma's Bytes column types the field as
+          // Uint8Array<ArrayBuffer>, and a Buffer's backing store is only
+          // ArrayBufferLike.
+          ...(storageDriver() === "db" ? { data: new Uint8Array(buf) } : {}),
+        },
+        select: { id: true },
+      });
+      await prisma.auditEvent.create({
+        data: { action: "upload_file", actor, target: projectId, detail: `${clean} (${Math.round(buf.length / 1024)} KB)` },
+      });
+      return {
+        fileId: asset.id,
+        itemId: item.id,
+        filename: clean,
+        sizeKb: Math.round(buf.length / 1024),
+        kind: ex.kind,
+        ...(ex.note ? { note: ex.note } : {}),
+        downloadPath: `/api/files/${asset.id}`,
+        by: actor,
+      };
     },
   },
   {

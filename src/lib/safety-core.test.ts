@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { unlinkSync } from "node:fs";
 import path from "node:path";
@@ -265,6 +266,75 @@ describe("pending proposals reach an agent without being searched for", () => {
     );
     const bobsFinal = (await inbox.handler({}, ctxOf(bob))) as { yourProposals: Array<{ suggestionId: string; reviewNote: string }> };
     expect(bobsFinal.yourProposals.find((x) => x.suggestionId === made2.suggestionId)!.reviewNote).toMatch(/downstream cap/);
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+});
+
+// Sharing a file through the vault. The failure that motivated these: an agent
+// could SEE an uploaded image and never obtain it, and could not put one in at
+// all — so an asset that had to reach a repository could not travel.
+describe("files an agent can put in and take out", () => {
+  const me = { id: "f1", username: "file-agent", role: "member", status: "approved" };
+  // Bytes that are not valid UTF-8, so a string round-trip would corrupt them
+  // — exactly what must never happen to an image.
+  const png = () => {
+    const b = Buffer.alloc(40);
+    b.writeUInt32BE(0x89504e47, 0);
+    b.writeUInt32BE(64, 16);
+    b.writeUInt32BE(48, 20);
+    b.writeUInt8(0xff, 30);
+    b.writeUInt8(0xfe, 31);
+    return b;
+  };
+  const newProject = (n: string) => prisma.project.create({ data: { name: n, slug: `${n}-${Date.now()}` } });
+
+  it("uploads via MCP, reads real dimensions, and hands back a download path", async () => {
+    const p = await newProject("Files1");
+    const bytes = png();
+    const up = (await toolMap.get("upload_file")!.handler(
+      { projectId: p.id, filename: "wallpaper.png", contentBase64: bytes.toString("base64") },
+      ctxOf(me),
+    )) as { fileId: string; kind: string; note?: string; downloadPath: string };
+    expect(up.kind).toBe("image");
+    expect(up.note).toBe("PNG image, 64×48");
+    expect(up.downloadPath).toBe(`/api/files/${up.fileId}`);
+    const stored = await prisma.fileAsset.findUnique({ where: { id: up.fileId }, select: { size: true, filename: true } });
+    expect(stored?.size).toBe(bytes.length);
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+
+  it("refuses a payload that is not whole base64 groups — the signature of truncation", async () => {
+    const p = await newProject("Files2");
+    const b64 = png().toString("base64");
+    await expect(
+      toolMap.get("upload_file")!.handler({ projectId: p.id, filename: "a.png", contentBase64: b64.slice(0, b64.length - 5) }, ctxOf(me)),
+    ).rejects.toThrow(/truncated/);
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+
+  it("catches a truncation that is STILL valid base64 — but only when sha256 is given", async () => {
+    // The honest limit: base64 cut on a 4-character boundary decodes cleanly
+    // to a SMALLER file and is indistinguishable from one. Only a checksum can
+    // tell "truncated" from "small", so the tool offers one and checks it.
+    const p = await newProject("Files3");
+    const bytes = png();
+    const chopped = bytes.toString("base64").slice(0, bytes.toString("base64").length - 8);
+    const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+    await expect(toolMap.get("upload_file")!.handler({ projectId: p.id, filename: "ok.png", contentBase64: chopped }, ctxOf(me))).resolves.toBeTruthy();
+    await expect(
+      toolMap.get("upload_file")!.handler({ projectId: p.id, filename: "b.png", contentBase64: chopped, sha256: digest }, ctxOf(me)),
+    ).rejects.toThrow(/sha256 mismatch/);
+    await prisma.project.delete({ where: { id: p.id } });
+  });
+
+  it("rejects a data: URI, saying what to send instead", async () => {
+    const p = await newProject("Files4");
+    await expect(
+      toolMap.get("upload_file")!.handler(
+        { projectId: p.id, filename: "c.png", contentBase64: `data:image/png;base64,${png().toString("base64")}` },
+        ctxOf(me),
+      ),
+    ).rejects.toThrow(/not base64/);
     await prisma.project.delete({ where: { id: p.id } });
   });
 });

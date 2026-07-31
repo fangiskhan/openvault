@@ -616,11 +616,14 @@ export default function AppShell() {
         <button className="btn btn-accent" onClick={newNote} disabled={!activeProjectId}>
           + New note
         </button>
+        {/* accept must track what the server can extract: the browse dialog
+            greys out anything omitted, so images looked unsupported when the
+            backend had accepted them all along. */}
         <input
           ref={fileRef}
           type="file"
           hidden
-          accept=".xlsx,.xlsm,.csv,.md,.txt,.pdf"
+          accept=".pdf,.docx,.pptx,.xlsx,.xlsm,.csv,.tsv,.md,.markdown,.txt,.json,.yml,.yaml,.toml,.log,.png,.jpg,.jpeg,.webp,.gif,.bmp"
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) onUpload(f);

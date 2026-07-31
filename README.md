@@ -2,13 +2,35 @@
 
 A self-hosted project hub that your team and its AI agents share over MCP. An agent records a status, raises a blocker, or logs what it finished. The next agent, on another machine in another repo, reads that record and acts on it. Nobody relays anything.
 
+![How work moves through OpenVault: your agent prompts, briefs itself, reads the code mirror, announces work and proposes a change; the vault holds the review queue; their agent applies the approved change and pushes; CI mirrors it back](docs/pipeline.svg)
+
+There is a [live, interactive version of this diagram](https://openvault-hub.vercel.app/pipeline) — the same pipeline in 3D, with the unit of work travelling through it.
+
 A concrete run: your agent finishes a task and files a cross-project blocker. Your colleague's agent starts cold an hour later, calls `get_attention`, sees the blocker with the error text and the project it belongs to, and picks it up. You and your colleague never spoke.
 
 A live instance runs at [openvault-hub.vercel.app](https://openvault-hub.vercel.app) (password-gated, as every deployed vault is). Self-hosting your own takes about five minutes; see [Quick start](#quick-start-local).
 
 Notes, tasks, risks, meeting minutes and spreadsheets live inside projects. Connect two projects and wikilinks, search and the graph cross the boundary. Each project also carries a code mirror and a work board, so agents read current code and see each other's in-flight changes without pulling GitHub. Run it on your own machine, your own server, or Vercel. Your data stays where you put it.
 
-Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 46 MCP tools for reading and writing state, code, and coordination. 160 automated tests cover the rules engine, the similarity engine, the code mirror's concurrency and recoverability, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
+Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 47 MCP tools for reading and writing state, code, and coordination. 168 automated tests cover the rules engine, the similarity engine, the code mirror's concurrency and recoverability, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
+
+## What it looks like
+
+The vault at rest — projects on the left, the note you are reading in the middle, and the links, backlinks and inferred connections it already has on the right.
+
+![The Notes view: a project list, an open note about the live deployment, and a right rail of links, backlinks and inferred related notes](docs/screenshots/01-notes.png)
+
+The attention board. Every row cites the item that triggered it, so a status is never an opinion — it is a claim you can open.
+
+![The Status view: a RAG headline, per-project health, and an attention board where each row cites its source item](docs/screenshots/02-status.png)
+
+The code mirror and the review queue: what agents can read without cloning, and what is waiting on a human verdict.
+
+![The Code view: the mirrored file tree with hashes and refs, alongside the review queue](docs/screenshots/03-code.png)
+
+The whole vault as an arc diagram. Notes run left to right grouped by project, so every arc that leaves its colour band is a cross-project connection.
+
+![The Graph view: an arc diagram of the whole vault, with arcs crossing between project colour bands](docs/screenshots/04-graph.png)
 
 ## Who uses it
 
@@ -26,7 +48,10 @@ Working v1: projects, status, cited briefings, multi-user accounts with roles an
 - **Document and image upload, extracted into searchable text.** PDF, DOCX, PPTX, XLSX/CSV, TXT/MD and images (PNG, JPEG, WebP, GIF). The extracted text becomes the item body, so search finds a phrase inside a slide deck rather than only its filename. Dependency-free: Office files are ZIP archives of XML and PDF text lives in compressed content streams, both of which Node's `zlib` already opens. PDFs decode through their `/ToUnicode` tables where those resolve; where they do not, the upload **says so** instead of storing glyph indices that merely look like text — one real PDF produced `"! ,0++.-*(&*)`, and putting that into search results would be worse than storing nothing. Scanned PDFs are reported as needing OCR. `list_files` and `read_file` give agents access, and `read_file` returns an **image as an image**, so an agent can look at a screenshot rather than be told about one.
 - A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status
 - A one-screen briefing built from real items; each line links to its source
-- 46 MCP tools (table below)
+- 47 MCP tools (table below)
+- An interactive [3D pipeline page](https://openvault-hub.vercel.app/pipeline) at `/pipeline` — the loop as three swim lanes with the unit of work travelling through it. three.js is imported only by that route, so the vault itself never pays for it.
+
+![The 3D pipeline page: three swim lanes — your agent, the vault, their agent — with the eight steps of the loop and a marker travelling between them](docs/screenshots/05-pipeline.png)
 - **Suggested changes** — the route for someone who can't write the code: a collaborator with no git access, or any agent on a replica-mode mirror. They propose content-anchored edits ("replace this exact text with that") plus a required reason; the server verifies each anchor occurs exactly once in the current file, so a stale or ambiguous suggestion is refused at proposal time rather than misapplied later. An owner approves, and gets the resulting file to apply in their own checkout. **The vault never writes to git** — no stored credential, no merge engine, nothing lands that a human didn't approve on their own machine. The reason becomes a linked note, so why a change happened outlives the review that a pull-request description would have taken with it. A working-copy flow ships with it: `scripts/checkout-mirror.ts` materialises the mirror to a local directory so an agent edits real files with its native tools instead of windowed `read_code` calls, and `scripts/propose-changes.ts` diffs the working copy against its pristine base and files every change as anchored suggestions automatically. All three change types travel through the queue — edits, new files (large ones as multi-part proposals), and deletions, so a refactor's removals get reviewed with its additions instead of riding along in prose. A mistaken proposal can be withdrawn by its author, and a mistaken note retracted with `delete_item` — both audited, because taking something back is itself a fact worth keeping.
 - Bulk ingestion: your agent splits a transcript, doc, or export into atomic notes (the downloadable vault-ingest skill teaches it how) and calls `import_notes`; the server builds the Map-of-Content, cross-links, and graph
 - Inferred connections: the Related rail and `suggest_links` surface notes that share content but were never linked; `find_project_bridges` proposes candidate project pairs; the graph groups notes into topic clusters. Every suggestion ships with the terms behind it, because the matching is lexical rather than semantic — two unrelated projects that both hit the same library error will score, and the evidence is how you tell that apart from real overlap in seconds.

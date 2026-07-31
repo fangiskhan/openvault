@@ -1059,6 +1059,195 @@ textarea {
   color: #fff;
 }
 
+/* ---------- /pipeline — the how-it-works page ---------- */
+/* Same SPX language as the accounts panel below: neon on paper, Orbitron,
+   chunky offset shadows, 3px ink borders, zero rounding. Scoped to .spx-page
+   so it cannot leak into the vault's dark theme. */
+.spx-page {
+  --spx-lime: #e5ff1a;
+  --spx-magenta: #ff1a66;
+  --spx-cyan: #00e5ff;
+  --spx-ink: #0a0a0a;
+  --spx-paper: #f5f5f5;
+  background: var(--spx-paper);
+  color: var(--spx-ink);
+  font-family: "Space Mono", ui-monospace, monospace;
+  min-height: 100vh;
+  padding: 40px 28px 80px;
+}
+.pipe-head {
+  max-width: 1180px;
+  margin: 0 auto 26px;
+}
+.pipe-head h1 {
+  font-family: "Orbitron", sans-serif;
+  font-weight: 900;
+  letter-spacing: 12px;
+  font-size: clamp(34px, 6vw, 70px);
+  margin: 0;
+  line-height: 1;
+  /* The two-colour offset, as text — the signature of the look. */
+  text-shadow: 5px 5px 0 var(--spx-magenta), 9px 9px 0 var(--spx-cyan);
+}
+.pipe-kicker {
+  margin: 16px 0 10px;
+  font-size: 15px;
+  max-width: 62ch;
+  line-height: 1.55;
+}
+.pipe-back {
+  display: inline-block;
+  color: var(--spx-ink);
+  text-decoration: none;
+  border: 3px solid var(--spx-ink);
+  background: #fff;
+  box-shadow: 5px 5px 0 0 var(--spx-ink);
+  padding: 7px 14px;
+  font-size: 13px;
+}
+.pipe-back:hover {
+  background: var(--spx-lime);
+}
+.pipe-wrap {
+  position: relative;
+  max-width: 1180px;
+  margin: 0 auto;
+  border: 3px solid var(--spx-ink);
+  box-shadow: 12px 12px 0 0 var(--spx-ink), 18px 18px 0 0 var(--spx-magenta);
+  background: var(--spx-paper);
+}
+.pipe-canvas {
+  width: 100%;
+  /* Wide and shallow, to match a diagram that is eight columns across and
+     three rows tall. A taller box just adds empty paper. */
+  height: clamp(320px, 44vh, 460px);
+}
+.pipe-hud {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-top: 3px solid var(--spx-ink);
+  padding: 10px 12px;
+  background: #fff;
+}
+.pipe-btn {
+  font-family: "Orbitron", sans-serif;
+  font-weight: 700;
+  letter-spacing: 2px;
+  font-size: 12px;
+  border: 3px solid var(--spx-ink);
+  background: var(--spx-lime);
+  box-shadow: 4px 4px 0 0 var(--spx-ink);
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.pipe-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 0 var(--spx-ink);
+}
+.pipe-read {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  min-height: 20px;
+}
+.pipe-read strong {
+  font-family: "Orbitron", sans-serif;
+  letter-spacing: 2px;
+}
+.pipe-dim {
+  color: #888;
+}
+.pipe-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+  max-width: 1180px;
+  margin: 40px auto 0;
+}
+.pipe-lane {
+  background: #fff;
+  border: 3px solid var(--spx-ink);
+  border-top-width: 12px;
+  box-shadow: 7px 7px 0 0 var(--spx-ink);
+  padding: 16px 16px 18px;
+}
+.pipe-lane h2 {
+  font-family: "Orbitron", sans-serif;
+  font-weight: 900;
+  letter-spacing: 4px;
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+.pipe-lane p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.pipe-h2 {
+  font-family: "Orbitron", sans-serif;
+  font-weight: 900;
+  letter-spacing: 6px;
+  font-size: 18px;
+  margin: 0 0 18px;
+  padding-bottom: 8px;
+  border-bottom: 3px solid var(--spx-ink);
+}
+.pipe-steps,
+.pipe-rule {
+  max-width: 1180px;
+  margin: 46px auto 0;
+}
+.pipe-steps ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+.pipe-steps li {
+  display: flex;
+  gap: 14px;
+  background: #fff;
+  border: 3px solid var(--spx-ink);
+  box-shadow: 6px 6px 0 0 var(--spx-ink);
+  padding: 14px;
+}
+.pipe-num {
+  font-family: "Orbitron", sans-serif;
+  font-weight: 900;
+  font-size: 22px;
+  background: var(--spx-cyan);
+  border: 3px solid var(--spx-ink);
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.pipe-steps strong {
+  font-family: "Orbitron", sans-serif;
+  letter-spacing: 1px;
+  font-size: 13px;
+}
+.pipe-steps p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.pipe-rule p {
+  background: var(--spx-lime);
+  border: 3px solid var(--spx-ink);
+  box-shadow: 8px 8px 0 0 var(--spx-ink);
+  padding: 18px;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  max-width: 76ch;
+}
+
 /* ---------- SPX6900 game-UI theme (Accounts admin panel) ---------- */
 /* Copied from the user's website: neon-on-paper, Orbitron + Space Mono,
    chunky 2-color offset shadows, sharp 3px borders, zero rounding. Scoped to

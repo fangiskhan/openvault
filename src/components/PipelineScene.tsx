@@ -39,9 +39,14 @@ type Step = {
 // Column pitch must exceed CARD_W or neighbours overlap — which is exactly
 // what went wrong at a pitch of 3 with 4.6-wide cards.
 const CARD_W = 4.6;
-// Shorter than before: with the sub-line moved to the hover read-out, a tall
-// card is empty space. Not so short that a 4.6-wide card reads as a strip.
-const CARD_H = 1.35;
+// CARD_H must match the card geometry below, and for a while it did not: the
+// box was built from a hardcoded 1.44 while the label plane used CARD_H. Once
+// CARD_H moved, the label — which draws its own black border — sat inset
+// inside a box that has its own edge outline, so every card wore a doubled
+// border with a white sliver between the two. Everything is derived from these
+// two constants now, so the pair cannot drift again.
+const CARD_H = 1.44;
+const CARD_D = 0.34; // extrusion depth
 const PITCH = 5.0;
 
 // Lane assignment follows WHERE THE THING LIVES, not who benefits from it.
@@ -120,16 +125,22 @@ export default function PipelineScene() {
     // A label drawn to a canvas, so the Orbitron/Space Mono pairing carries
     // into the scene instead of being replaced by a generic 3D font.
     //
-    // Title only. With nine columns across a fixed-width canvas, each card is
-    // about a hundred pixels wide — enough for one line at a readable size, or
-    // two lines at an unreadable one. The scene shows the SHAPE of the loop and
-    // the hover read-out carries the detail; the README's static diagram
-    // carries all of it. Card on-screen size depends only on canvas width and
-    // the diagram's total span, so shrinking the type was the wrong lever.
-    const makeLabel = (title: string, colour: number) => {
+    // Two lines, title over sub. A single line was tried when a ninth column
+    // was added, on the theory that the sub-line had become too small to read;
+    // it made every card half-empty instead, because the box is sized for two.
+    // The sub-line is texture as much as text — it is what makes a card look
+    // like a filled card — and the hover read-out is there for anyone who
+    // actually needs to read it.
+    //
+    // The canvas aspect must track CARD_W:CARD_H, or the texture is stretched
+    // onto the plane and the border stroke comes out thicker on two sides than
+    // the other two.
+    const LABEL_W = 640;
+    const LABEL_H = Math.round((LABEL_W * CARD_H) / CARD_W);
+    const makeLabel = (title: string, sub: string, colour: number) => {
       const c = document.createElement("canvas");
-      c.width = 660;
-      c.height = 150;
+      c.width = LABEL_W;
+      c.height = LABEL_H;
       const g = c.getContext("2d")!;
       g.fillStyle = "#ffffff";
       g.fillRect(0, 0, c.width, c.height);
@@ -137,17 +148,25 @@ export default function PipelineScene() {
       g.lineWidth = 10;
       g.strokeRect(5, 5, c.width - 10, c.height - 10);
       g.fillStyle = `#${colour.toString(16).padStart(6, "0")}`;
-      g.fillRect(5, 5, c.width - 10, 20);
+      g.fillRect(5, 5, c.width - 10, 16);
       g.fillStyle = "#0a0a0a";
-      g.textBaseline = "middle";
-      // Shrink to fit rather than overflow: REVIEW_SUGGESTION is much longer
-      // than READ_CODE, and a clipped label is worse than a smaller one.
-      let size = 62;
+      // Shrink to fit rather than overflow: REVIEW_SUGGESTION is half again as
+      // long as READ_CODE, and a clipped label is worse than a smaller one.
+      const inner = c.width - 52;
+      let size = 44;
       do {
         g.font = `900 ${size}px Orbitron, sans-serif`;
+        g.letterSpacing = "3px";
         size -= 2;
-      } while (g.measureText(title).width > c.width - 60 && size > 26);
-      g.fillText(title, 30, c.height / 2 + 8);
+      } while (g.measureText(title).width > inner && size > 28);
+      g.fillText(title, 26, 92);
+      let subSize = 26;
+      do {
+        g.font = `${subSize}px 'Space Mono', ui-monospace, monospace`;
+        subSize -= 1;
+      } while (g.measureText(sub).width > inner && subSize > 16);
+      g.fillStyle = "#444";
+      g.fillText(sub, 26, 140);
       const tex = new THREE.CanvasTexture(c);
       tex.anisotropy = 8;
       const mat = new THREE.MeshBasicMaterial({ map: tex });
@@ -164,14 +183,14 @@ export default function PipelineScene() {
 
       // The chunky offset shadow, as geometry: a black slab behind the card.
       const shadow = new THREE.Mesh(
-        new THREE.BoxGeometry(4.6, 1.44, 0.35),
+        new THREE.BoxGeometry(CARD_W, CARD_H, CARD_D + 0.01),
         new THREE.MeshBasicMaterial({ color: INK }),
       );
       shadow.position.set(0.28, -0.28, -0.34);
       group.add(shadow);
 
       const box = new THREE.Mesh(
-        new THREE.BoxGeometry(4.6, 1.44, 0.34),
+        new THREE.BoxGeometry(CARD_W, CARD_H, CARD_D),
         new THREE.MeshLambertMaterial({ color: 0xffffff }),
       );
       group.add(box);
@@ -182,7 +201,7 @@ export default function PipelineScene() {
       );
       group.add(edges);
 
-      const label = makeLabel(step.label, step.colour);
+      const label = makeLabel(step.label, step.sub, step.colour);
       label.position.set(0, 0, 0.18);
       group.add(label);
 
@@ -192,15 +211,9 @@ export default function PipelineScene() {
       box.userData.id = step.id;
     }
 
-    // Connectors, drawn as thick ink lines between consecutive steps.
-    //
-    // Each link keeps the FULL polyline plus its cumulative arc length, so the
-    // travelling marker can be placed along the same path that is drawn. It
-    // previously lerped straight from start to end while the wire turned right
-    // angles, so it visibly cut every corner.
+    // Connectors, drawn as thick ink lines between consecutive steps. Static:
+    // the wires are the diagram's skeleton, and nothing rides along them.
     const linkMat = new THREE.LineBasicMaterial({ color: INK });
-    type Link = { pts: THREE.Vector3[]; cum: number[]; total: number };
-    const links: Link[] = [];
     for (let i = 0; i < STEPS.length - 1; i++) {
       const a = new THREE.Vector3(STEPS[i].x + CARD_W / 2, LANE_Y[STEPS[i].lane], 0);
       const b = new THREE.Vector3(STEPS[i + 1].x - CARD_W / 2, LANE_Y[STEPS[i + 1].lane], 0);
@@ -210,34 +223,7 @@ export default function PipelineScene() {
       const mid2 = new THREE.Vector3((a.x + b.x) / 2, b.y, 0);
       const pts = a.y === b.y ? [a, b] : [a, mid, mid2, b];
       scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), linkMat));
-      const cum = [0];
-      for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + pts[k].distanceTo(pts[k - 1]));
-      links.push({ pts, cum, total: cum[cum.length - 1] });
     }
-
-    // Position along a polyline by fraction of its arc length.
-    const pointAt = (link: Link, u: number, out: THREE.Vector3) => {
-      const d = Math.max(0, Math.min(1, u)) * link.total;
-      let seg = 1;
-      while (seg < link.cum.length - 1 && link.cum[seg] < d) seg++;
-      const segLen = link.cum[seg] - link.cum[seg - 1] || 1;
-      out.lerpVectors(link.pts[seg - 1], link.pts[seg], (d - link.cum[seg - 1]) / segLen);
-    };
-
-    // A travelling marker: the unit of work moving through the pipeline. This
-    // is the whole point of animating it — the diagram shows a LOOP, and a
-    // still image cannot show that the same thing keeps going round.
-    const puck = new THREE.Mesh(
-      new THREE.SphereGeometry(0.36, 24, 24),
-      new THREE.MeshBasicMaterial({ color: MAGENTA }),
-    );
-    scene.add(puck);
-    const puckRing = new THREE.Mesh(
-      new THREE.TorusGeometry(0.62, 0.07, 10, 40),
-      new THREE.MeshBasicMaterial({ color: INK }),
-    );
-    puckRing.rotation.x = Math.PI / 2;
-    scene.add(puckRing);
 
     // Lane plates. Billboarded to face the camera rather than lying flat on
     // the ground: laid flat they were skewed by the isometric projection into
@@ -298,56 +284,34 @@ export default function PipelineScene() {
       n.group.quaternion.copy(camera.quaternion);
     });
 
-    // The loop alternates DWELL (the marker sits at a node, which bobs) and
-    // TRAVEL (the marker runs along the wire to the next node). Phrasing it as
-    // phases rather than one continuous sweep is what lets a box animate only
-    // while the work is actually there, and stop the moment it leaves.
+    // One step is live at a time, and the live step walks the chain in order.
+    // There is no travelling marker any more — the sequence itself carries the
+    // direction, and a puck sliding along the wires competed with the thing it
+    // was supposed to be pointing at.
+    //
+    // GAP is the beat between steps. Without it each card would hand straight
+    // over to the next and the row would read as one continuous wave rather
+    // than nine discrete steps firing in turn.
     const DWELL = 0.85;
-    const TRAVEL = 1.15;
-    const CYCLE = STEPS.length * DWELL + links.length * TRAVEL;
+    const GAP = 0.22;
+    const SLOT = DWELL + GAP;
+    const CYCLE = STEPS.length * SLOT;
 
     let t = 0;
     let raf = 0;
     const clock = new THREE.Clock();
-    const tmp = new THREE.Vector3();
 
     const animate = () => {
       raf = requestAnimationFrame(animate);
       const dt = clock.getDelta();
       if (!pausedRef.current) t = (t + dt) % CYCLE;
 
-      // Walk the phase list to find where in the loop we are.
-      let rest = t;
-      let dwellAt = -1; // node index the marker is resting on, or -1
-      let travelIdx = -1; // link index being travelled, or -1
-      let travelU = 0;
-      for (let i = 0; i < STEPS.length; i++) {
-        if (rest < DWELL) {
-          dwellAt = i;
-          break;
-        }
-        rest -= DWELL;
-        if (i < links.length) {
-          if (rest < TRAVEL) {
-            travelIdx = i;
-            travelU = rest / TRAVEL;
-            break;
-          }
-          rest -= TRAVEL;
-        }
-      }
-
-      if (travelIdx >= 0) {
-        pointAt(links[travelIdx], travelU, tmp);
-        puck.position.copy(tmp);
-      } else if (dwellAt >= 0) {
-        // Rest on the node's right edge, riding its bob so the marker and the
-        // card move together instead of the card sliding out from under it.
-        const n = nodes[dwellAt];
-        puck.position.set(n.step.x + CARD_W / 2, n.group.position.y, 0);
-      }
-      puckRing.position.copy(puck.position);
-      puckRing.rotation.z += dt * 2.4;
+      // Which step is live, and how far into its dwell. During the GAP no step
+      // is live, so every card is settling.
+      const slot = Math.floor(t / SLOT);
+      const intoSlot = t - slot * SLOT;
+      const dwellAt = intoSlot < DWELL ? slot : -1;
+      const dwellT = intoSlot;
 
       nodes.forEach((n, i) => {
         const base = n.group.userData.baseY as number;
@@ -355,7 +319,7 @@ export default function PipelineScene() {
         // A steady bob while the work is HERE, settling back the instant it
         // moves on — the animation says "this step is happening now" rather
         // than just marking a position.
-        const bob = isLive ? Math.sin((t / DWELL) * Math.PI * 2 * 1.5) * 0.22 + 0.3 : 0;
+        const bob = isLive ? Math.sin((dwellT / DWELL) * Math.PI * 2 * 1.5) * 0.22 + 0.3 : 0;
         const target = base + bob;
         // Snap up quickly, settle down gently: an abrupt drop reads as a
         // glitch, an abrupt rise reads as arrival.

@@ -39,26 +39,36 @@ type Step = {
 // Column pitch must exceed CARD_W or neighbours overlap — which is exactly
 // what went wrong at a pitch of 3 with 4.6-wide cards.
 const CARD_W = 4.6;
-const CARD_H = 1.44;
-const PITCH = 5.2;
-const col = (i: number) => (i - 3.5) * PITCH;
+// Shorter than before: with the sub-line moved to the hover read-out, a tall
+// card is empty space. Not so short that a 4.6-wide card reads as a strip.
+const CARD_H = 1.35;
+const PITCH = 5.0;
 
-const STEPS: Step[] = [
-  { id: "prompt", label: "YOU PROMPT", sub: "“add retries to the client”", lane: 0, x: col(0), colour: LIME },
-  { id: "brief", label: "GET_BRIEFING", sub: "state, skills, open queue", lane: 1, x: col(1), colour: CYAN },
-  { id: "read", label: "READ_CODE", sub: "the mirror, at one commit", lane: 1, x: col(2), colour: CYAN },
-  { id: "announce", label: "ANNOUNCE_WORK", sub: "warns on overlap", lane: 0, x: col(3), colour: LIME },
-  { id: "suggest", label: "SUGGEST_CHANGE", sub: "anchored edits + reason", lane: 0, x: col(4), colour: LIME },
-  { id: "queue", label: "REVIEW QUEUE", sub: "nothing lands unreviewed", lane: 1, x: col(5), colour: MAGENTA },
-  { id: "apply", label: "OWNER APPLIES", sub: "in their own checkout", lane: 2, x: col(6), colour: MAGENTA },
-  { id: "ci", label: "CI MIRRORS", sub: "vault follows git", lane: 1, x: col(7), colour: CYAN },
+// Lane assignment follows WHERE THE THING LIVES, not who benefits from it.
+// The review queue is vault state — CodeSuggestion rows — so it sits in the
+// vault lane and carries the vault's colour. Approving is a separate act
+// performed BY the other agent, so it gets its own step in their lane; without
+// it the diagram jumped from vault storage straight to "owner applies" and the
+// queue looked misfiled.
+const RAW: Array<Omit<Step, "x">> = [
+  { id: "prompt", label: "YOU PROMPT", sub: "“add retries to the client”", lane: 0, colour: LIME },
+  { id: "brief", label: "GET_BRIEFING", sub: "state, skills, open queue", lane: 1, colour: CYAN },
+  { id: "read", label: "READ_CODE", sub: "the mirror, at one commit", lane: 1, colour: CYAN },
+  { id: "announce", label: "ANNOUNCE_WORK", sub: "warns on overlap", lane: 0, colour: LIME },
+  { id: "suggest", label: "SUGGEST_CHANGE", sub: "anchored edits + reason", lane: 0, colour: LIME },
+  { id: "queue", label: "REVIEW QUEUE", sub: "vault state, unreviewed", lane: 1, colour: CYAN },
+  { id: "review", label: "REVIEW_SUGGESTION", sub: "they approve or reject", lane: 2, colour: MAGENTA },
+  { id: "apply", label: "OWNER APPLIES", sub: "their checkout, then push", lane: 2, colour: MAGENTA },
+  { id: "ci", label: "CI MIRRORS", sub: "vault follows git", lane: 1, colour: CYAN },
 ];
+const STEPS: Step[] = RAW.map((s, i) => ({ ...s, x: (i - (RAW.length - 1) / 2) * PITCH }));
 
 // Row height per lane. Generous rather than tight: the diagram is inherently
-// wide (eight columns), so an orthographic frame sized to that width leaves
+// wide (nine columns), so an orthographic frame sized to that width leaves
 // vertical room, and spreading the lanes uses it instead of leaving the whole
-// thing floating in an empty box.
-const LANE_Y = [4.4, 0, -4.4];
+// thing floating in an empty box. At 4.4 the three rows filled about 60% of
+// the frame's height and sat in a band with dead space above and below.
+const LANE_Y = [6.6, 0, -6.6];
 
 export default function PipelineScene() {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -109,10 +119,17 @@ export default function PipelineScene() {
 
     // A label drawn to a canvas, so the Orbitron/Space Mono pairing carries
     // into the scene instead of being replaced by a generic 3D font.
-    const makeLabel = (title: string, sub: string, colour: number) => {
+    //
+    // Title only. With nine columns across a fixed-width canvas, each card is
+    // about a hundred pixels wide — enough for one line at a readable size, or
+    // two lines at an unreadable one. The scene shows the SHAPE of the loop and
+    // the hover read-out carries the detail; the README's static diagram
+    // carries all of it. Card on-screen size depends only on canvas width and
+    // the diagram's total span, so shrinking the type was the wrong lever.
+    const makeLabel = (title: string, colour: number) => {
       const c = document.createElement("canvas");
-      c.width = 640;
-      c.height = 200;
+      c.width = 660;
+      c.height = 150;
       const g = c.getContext("2d")!;
       g.fillStyle = "#ffffff";
       g.fillRect(0, 0, c.width, c.height);
@@ -120,19 +137,21 @@ export default function PipelineScene() {
       g.lineWidth = 10;
       g.strokeRect(5, 5, c.width - 10, c.height - 10);
       g.fillStyle = `#${colour.toString(16).padStart(6, "0")}`;
-      g.fillRect(5, 5, c.width - 10, 16);
+      g.fillRect(5, 5, c.width - 10, 20);
       g.fillStyle = "#0a0a0a";
-      g.font = "900 44px Orbitron, sans-serif";
-      g.letterSpacing = "3px";
-      g.fillText(title, 26, 92);
-      g.font = "26px 'Space Mono', ui-monospace, monospace";
-      g.fillStyle = "#444";
-      g.fillText(sub, 26, 140);
+      g.textBaseline = "middle";
+      // Shrink to fit rather than overflow: REVIEW_SUGGESTION is much longer
+      // than READ_CODE, and a clipped label is worse than a smaller one.
+      let size = 62;
+      do {
+        g.font = `900 ${size}px Orbitron, sans-serif`;
+        size -= 2;
+      } while (g.measureText(title).width > c.width - 60 && size > 26);
+      g.fillText(title, 30, c.height / 2 + 8);
       const tex = new THREE.CanvasTexture(c);
-      tex.anisotropy = 4;
-      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: false });
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 1.44), mat);
-      return mesh;
+      tex.anisotropy = 8;
+      const mat = new THREE.MeshBasicMaterial({ map: tex });
+      return new THREE.Mesh(new THREE.PlaneGeometry(CARD_W, CARD_H), mat);
     };
 
     const nodes: Array<{ step: Step; group: THREE.Group; box: THREE.Mesh }> = [];
@@ -163,7 +182,7 @@ export default function PipelineScene() {
       );
       group.add(edges);
 
-      const label = makeLabel(step.label, step.sub, step.colour);
+      const label = makeLabel(step.label, step.colour);
       label.position.set(0, 0, 0.18);
       group.add(label);
 
@@ -174,8 +193,14 @@ export default function PipelineScene() {
     }
 
     // Connectors, drawn as thick ink lines between consecutive steps.
+    //
+    // Each link keeps the FULL polyline plus its cumulative arc length, so the
+    // travelling marker can be placed along the same path that is drawn. It
+    // previously lerped straight from start to end while the wire turned right
+    // angles, so it visibly cut every corner.
     const linkMat = new THREE.LineBasicMaterial({ color: INK });
-    const links: Array<{ from: THREE.Vector3; to: THREE.Vector3 }> = [];
+    type Link = { pts: THREE.Vector3[]; cum: number[]; total: number };
+    const links: Link[] = [];
     for (let i = 0; i < STEPS.length - 1; i++) {
       const a = new THREE.Vector3(STEPS[i].x + CARD_W / 2, LANE_Y[STEPS[i].lane], 0);
       const b = new THREE.Vector3(STEPS[i + 1].x - CARD_W / 2, LANE_Y[STEPS[i + 1].lane], 0);
@@ -183,10 +208,21 @@ export default function PipelineScene() {
       // like a lane change, not like a slope.
       const mid = new THREE.Vector3((a.x + b.x) / 2, a.y, 0);
       const mid2 = new THREE.Vector3((a.x + b.x) / 2, b.y, 0);
-      const geo = new THREE.BufferGeometry().setFromPoints([a, mid, mid2, b]);
-      scene.add(new THREE.Line(geo, linkMat));
-      links.push({ from: a, to: b });
+      const pts = a.y === b.y ? [a, b] : [a, mid, mid2, b];
+      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), linkMat));
+      const cum = [0];
+      for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + pts[k].distanceTo(pts[k - 1]));
+      links.push({ pts, cum, total: cum[cum.length - 1] });
     }
+
+    // Position along a polyline by fraction of its arc length.
+    const pointAt = (link: Link, u: number, out: THREE.Vector3) => {
+      const d = Math.max(0, Math.min(1, u)) * link.total;
+      let seg = 1;
+      while (seg < link.cum.length - 1 && link.cum[seg] < d) seg++;
+      const segLen = link.cum[seg] - link.cum[seg - 1] || 1;
+      out.lerpVectors(link.pts[seg - 1], link.pts[seg], (d - link.cum[seg - 1]) / segLen);
+    };
 
     // A travelling marker: the unit of work moving through the pipeline. This
     // is the whole point of animating it — the diagram shows a LOOP, and a
@@ -262,37 +298,70 @@ export default function PipelineScene() {
       n.group.quaternion.copy(camera.quaternion);
     });
 
+    // The loop alternates DWELL (the marker sits at a node, which bobs) and
+    // TRAVEL (the marker runs along the wire to the next node). Phrasing it as
+    // phases rather than one continuous sweep is what lets a box animate only
+    // while the work is actually there, and stop the moment it leaves.
+    const DWELL = 0.85;
+    const TRAVEL = 1.15;
+    const CYCLE = STEPS.length * DWELL + links.length * TRAVEL;
+
     let t = 0;
     let raf = 0;
     const clock = new THREE.Clock();
+    const tmp = new THREE.Vector3();
 
     const animate = () => {
       raf = requestAnimationFrame(animate);
       const dt = clock.getDelta();
-      if (!pausedRef.current) t += dt * 0.16;
-      const loop = t % 1;
+      if (!pausedRef.current) t = (t + dt) % CYCLE;
 
-      // Move the puck along the chain of links.
-      const seg = Math.min(links.length - 1, Math.floor(loop * links.length));
-      const local = loop * links.length - seg;
-      const { from, to } = links[seg];
-      puck.position.lerpVectors(from, to, local);
-      puck.position.y = Math.sin(local * Math.PI) * 0.5;
+      // Walk the phase list to find where in the loop we are.
+      let rest = t;
+      let dwellAt = -1; // node index the marker is resting on, or -1
+      let travelIdx = -1; // link index being travelled, or -1
+      let travelU = 0;
+      for (let i = 0; i < STEPS.length; i++) {
+        if (rest < DWELL) {
+          dwellAt = i;
+          break;
+        }
+        rest -= DWELL;
+        if (i < links.length) {
+          if (rest < TRAVEL) {
+            travelIdx = i;
+            travelU = rest / TRAVEL;
+            break;
+          }
+          rest -= TRAVEL;
+        }
+      }
+
+      if (travelIdx >= 0) {
+        pointAt(links[travelIdx], travelU, tmp);
+        puck.position.copy(tmp);
+      } else if (dwellAt >= 0) {
+        // Rest on the node's right edge, riding its bob so the marker and the
+        // card move together instead of the card sliding out from under it.
+        const n = nodes[dwellAt];
+        puck.position.set(n.step.x + CARD_W / 2, n.group.position.y, 0);
+      }
       puckRing.position.copy(puck.position);
-      puckRing.rotation.z += dt * 2;
+      puckRing.rotation.z += dt * 2.4;
 
-      // The node the puck is at lifts and takes the accent colour, so the eye
-      // follows the work rather than scanning the whole board.
-      const activeIdx = Math.round(loop * links.length);
       nodes.forEach((n, i) => {
-        const isLive = i === activeIdx;
-        // Lift is relative to the card's own lane row, not to zero — with
-        // lanes as rows, animating toward 0 would drag every active card into
-        // the middle lane.
-        const target = (n.group.userData.baseY as number) + (isLive ? 0.42 : 0);
-        n.group.position.y += (target - n.group.position.y) * Math.min(1, dt * 8);
+        const base = n.group.userData.baseY as number;
+        const isLive = i === dwellAt;
+        // A steady bob while the work is HERE, settling back the instant it
+        // moves on — the animation says "this step is happening now" rather
+        // than just marking a position.
+        const bob = isLive ? Math.sin((t / DWELL) * Math.PI * 2 * 1.5) * 0.22 + 0.3 : 0;
+        const target = base + bob;
+        // Snap up quickly, settle down gently: an abrupt drop reads as a
+        // glitch, an abrupt rise reads as arrival.
+        n.group.position.y += (target - n.group.position.y) * Math.min(1, dt * (isLive ? 14 : 7));
         const mat = n.box.material as THREE.MeshLambertMaterial;
-        mat.color.lerp(new THREE.Color(isLive ? n.step.colour : 0xffffff), Math.min(1, dt * 8));
+        mat.color.lerp(new THREE.Color(isLive ? n.step.colour : 0xffffff), Math.min(1, dt * 9));
       });
 
       // Hover read-out.

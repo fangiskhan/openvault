@@ -127,7 +127,12 @@ const shots = [
   { file: "05-pipeline.png", path: "/pipeline", label: "How it works (3D pipeline)", settle: 2600 },
 ];
 
-for (const s of shots) {
+// Re-shooting one image should not mean re-shooting all five: OV_ONLY=05 keeps
+// just the shots whose filename contains that string.
+const ONLY = process.env.OV_ONLY;
+const picked = ONLY ? shots.filter((s) => s.file.includes(ONLY)) : shots;
+
+for (const s of picked) {
   await send("Page.navigate", { url: `${BASE}${s.path}` });
   await sleep(s.settle ?? 1800);
   if (s.click) {
@@ -149,4 +154,4 @@ for (const s of shots) {
 
 ws.close();
 chrome.kill();
-console.log(`\n${shots.length} screenshot(s) -> ${OUT}`);
+console.log(`\n${picked.length} screenshot(s) -> ${OUT}`);

@@ -611,7 +611,7 @@ What earns a note:
 - **A gotcha you hit.** The symptom, the cause, the fix. These are the most
   expensive things to rediscover.
 - **How a subsystem actually works**, once you have read it.
-- **Measured numbers**, never adjectives. "6,010 tokens vs 83,106" beats "much
+- **Measured numbers**, never adjectives. "8,066 tokens vs 268,326" beats "much
   cheaper".
 - **Anything the user corrected you about.** Their correction is the durable
   fact; your first answer was not.

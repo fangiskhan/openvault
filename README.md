@@ -165,18 +165,25 @@ Results then rank on both signals (lexical leads; semantic surfaces notes that s
 
 ## Token cost, measured
 
-Numbers from this repo's own vault (89 mirrored files, ~180 notes):
+Measured against this project's own live vault — 116 mirrored files, 28 notes on OpenVault (87 across all projects) — by `node scripts/measure-context.mjs`, which prints this table. Re-run it rather than trusting it; these numbers move as the repo grows. Tokens are characters ÷ 4.
 
 | Question | Without the vault | With the vault |
 | --- | --- | --- |
-| What's the state of this project? | Re-explore the repo and history each cold start (est. 20-50k tokens) | 336-token briefing, injected by the hook |
-| What changed in the code? | Pull and read files | `get_code_map`: 6,010 tokens vs 83,106 to read the mirror's contents. 14x cheaper. |
-| What happened this week? | Scroll transcripts | 7-day `get_recent_activity` digest: 1,253 tokens |
-| What did we decide about X? | Re-read history | One `search` plus one cited note |
+| What's the state of this project? | Re-explore the repo and history each cold start (est. 20-50k tokens) | 438-token briefing, injected by the hook |
+| What changed in the code? | Read the mirror's contents: 268,326 tokens | `get_code_map`: 8,066 tokens. 33x cheaper. |
+| What happened this week? | Scroll transcripts | 7-day `get_recent_activity` digest: 4,994 tokens |
+| What did we decide about X? | Re-read history | One `search` plus the note it cites: 2,683 tokens |
 
 The briefing costs zero LLM tokens to produce (templated rules) and the inferred-connections layer runs on TF-IDF, so building and maintaining the knowledge layer costs no model calls either.
 
-Fine print: connecting the MCP server loads ~30 tool schemas into each session, a few thousand tokens of overhead that the first avoided file-read repays. Savings depend on the agent asking the vault before grepping; the connect-kit `CLAUDE.md` instructs it to. On very large vaults, prefer `topLinked` and `get_links` over a full `get_graph`. The cold-start row is an estimate; instrumented side-by-side agent sessions are future work.
+Fine print, because a table of numbers invites more trust than it has earned:
+
+- Connecting the MCP server loads 47 tool schemas into every session — a measured 7,366 tokens of overhead, paid whether or not a tool is called. Two avoided file-reads repay it.
+- The code-map ratio is a function of average file size, not a constant. It was 14x when the mirror held 89 smaller files and is 33x at 116; a repo of many tiny files would score worse.
+- The activity digest scales with how much actually happened, so it is the least stable row here. The same call on the same vault measured 1,253 tokens at an earlier point in this project's life.
+- The whole-mirror figure is the sum of stored file sizes, so it *understates* the real cost — reading those files through `read_code` also pays per-call envelope and headers.
+- Savings depend on the agent asking the vault before grepping; the connect-kit `CLAUDE.md` instructs it to. On very large vaults, prefer `topLinked` and `get_links` over a full `get_graph`.
+- The cold-start row is the one estimate left in the table. Instrumented side-by-side agent sessions are future work.
 
 ## Accounts: the team walkthrough
 

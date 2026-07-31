@@ -26,7 +26,11 @@ export const PROJECT_HEALTH = ["green", "amber", "red"] as const;
 // briefing is generated (never hand-written) and has its own surface, so it is
 // filtered OUT. risk IS content: the editor lets you turn a note into a risk,
 // so hiding risks here made them vanish from every list the moment you did.
-export const CONTENT_TYPES = ["note", "meeting", "task", "message", "file", "spreadsheet", "risk"] as const;
+//
+// document and image carry an upload's EXTRACTED text. Adding a type without
+// listing it here silently excludes it from search — which for uploads means
+// the extraction runs, the text is stored, and nothing can ever find it.
+export const CONTENT_TYPES = ["note", "meeting", "task", "message", "file", "document", "image", "spreadsheet", "risk"] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];
 export type SearchScope = (typeof SEARCH_SCOPES)[number];

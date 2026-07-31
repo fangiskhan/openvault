@@ -548,6 +548,21 @@ Not connected? \`claude mcp add openvault ${base}/api/mcp --transport http --sco
   cover what you're about to do — and if you work for the project's owner,
   pending ones are waiting on your review.
 
+## Shared files: documents, screenshots, assets
+
+- \`list_files\` shows what has been uploaded to this project; \`read_file\`
+  returns a document's extracted text, or an IMAGE you can actually look at.
+- Uploads are searchable by their CONTENT, so \`search\` finds a phrase inside
+  a PDF or a slide deck, not just its filename.
+- **An asset that belongs in the repo — a wallpaper, a logo, a font — must be
+  fetched, never retyped.** \`read_file\` returns a \`downloadPath\`; GET it
+  from this vault with your account token and write the bytes straight to the
+  destination. No model can reproduce a PNG by hand, and a "close enough" one
+  is a corrupt file.
+- Binary files cannot travel through \`suggest_change\` (it anchors on text).
+  Download the asset into the checkout, then propose the CODE that references
+  it as a normal anchored edit.
+
 ## Changing code you cannot push yourself — SUGGEST, don't fix
 
 If you have no git access here, or the mirror is a replica (sync_code will

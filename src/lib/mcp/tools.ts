@@ -245,7 +245,7 @@ export const tools: Tool[] = [
   {
     name: "read_file",
     description:
-      "Read an uploaded file. Documents return their extracted text; IMAGES return the picture itself, so you can look at a screenshot or diagram rather than being told about one. Large images are refused with their download URL instead of flooding your context.",
+      "Read an uploaded file. Documents return their extracted text; IMAGES return the picture itself, so you can look at a screenshot or diagram rather than being told about one. To put a file ON DISK (an asset that belongs in a repo — a wallpaper, a logo, a font) do NOT retype it: GET the returned downloadPath from this same vault URL with your account token and write the bytes straight to the destination. Large images skip the inline copy and return only that path.",
     inputSchema: {
       type: "object",
       properties: {
@@ -279,9 +279,15 @@ export const tools: Tool[] = [
         const data = await readBlob(f.storageKey);
         const mime = f.mimeType && f.mimeType.startsWith("image/") ? f.mimeType : `image/${(f.filename.split(".").pop() ?? "png").toLowerCase().replace("jpg", "jpeg")}`;
         // Content blocks, not JSON: this is what makes the image visible.
+        // The path is included as text because SEEING an image and being able
+        // to SAVE it are different needs — an asset headed for a repo has to
+        // arrive as bytes, and no model can retype a PNG faithfully.
         return {
           _mcpContent: [
-            { type: "text", text: `${f.filename} (${Math.round(f.size / 1024)} KB)` },
+            {
+              type: "text",
+              text: `${f.filename} (${Math.round(f.size / 1024)} KB${f.mimeType ? `, ${f.mimeType}` : ""})\nTo save it to disk, GET ${`/api/files/${f.id}`} from this vault with your account token — do not transcribe it.`,
+            },
             { type: "image", data: data.toString("base64"), mimeType: mime },
           ],
         };

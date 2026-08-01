@@ -616,6 +616,84 @@ textarea {
   flex-direction: column;
   box-shadow: 12px 12px 0 0 var(--ink), 16px 16px 0 0 var(--magenta);
 }
+/* ---------- confirm dialog ---------- */
+/* SPX popup motion, the "--snap" variant: a ~140ms scale pop with a slight
+   overshoot, which the design notes specify for SMALL CONFIRMS. The default
+   "slam" — a hard shadow travelling 22px -> 10px, reading as the panel hitting
+   the page — is for full panels and would be too heavy here. The house rule
+   underneath both: nothing fades slowly and nothing blurs. */
+@keyframes confirm-snap {
+  0% {
+    transform: scale(0.86);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.confirm {
+  width: min(430px, 92vw);
+  background: var(--bg-panel);
+  border: 3px solid var(--ink);
+  border-radius: 0;
+  box-shadow: 10px 10px 0 0 var(--ink), 14px 14px 0 0 var(--magenta);
+  animation: confirm-snap 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .confirm {
+    animation: none;
+  }
+}
+.confirm-head {
+  padding: 14px 18px;
+  border-bottom: 3px solid var(--ink);
+  font-family: var(--display);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-size: 14px;
+}
+.confirm-body {
+  padding: 18px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.confirm-body strong {
+  word-break: break-word;
+}
+.confirm-note {
+  margin: 10px 0 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 18px 18px;
+}
+/* Accent-ink rule: text sitting ON lime/magenta/cyan is ALWAYS #0a0a0a — black
+   measures ~6.6:1 on #ff1a66 where white measures ~4.0:1. `.btn:hover` uses
+   white on magenta, but that is the site's own hover convention; a persistent
+   accent PLATE like this one takes ink. */
+.btn-danger {
+  background: var(--magenta);
+  border-color: var(--ink);
+  color: #0a0a0a;
+}
+.btn-danger:hover {
+  background: var(--magenta);
+  color: #0a0a0a;
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 0 var(--ink);
+}
+
 /* The arc diagram is a wide picture and the default dialog width was cramping
    it. Its own size, not every dialog's: 920 -> 1200px, and a taller cap so the
    canvas below can grow with it. */

@@ -93,6 +93,7 @@ export default function AppShell() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [showGraph, setShowGraph] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status" | "code">("notes");
@@ -405,7 +406,7 @@ export default function AppShell() {
 
   const deleteItem = useCallback(async () => {
     if (!item) return;
-    if (!window.confirm(`Delete “${item.title}”?`)) return;
+    setConfirmDelete(false);
     dirty.current = false; // discarding — don't let a pending flush revive it
     const pid = item.projectId;
     try {
@@ -417,6 +418,17 @@ export default function AppShell() {
       notify("Couldn't delete the note.");
     }
   }, [item, loadDetail, openItem, notify]);
+
+  // Escape cancels. A destructive dialog that can only be dismissed by aiming
+  // at a button is worse than the native confirm it replaced.
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmDelete(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmDelete]);
 
   const openByTitle = useCallback(
     async (t: string) => {
@@ -812,7 +824,7 @@ export default function AppShell() {
                     </button>
                   </div>
                 )}
-                <button className="btn-ghost" onClick={deleteItem} title="Delete">
+                <button className="btn-ghost" onClick={() => setConfirmDelete(true)} title="Delete">
                   🗑
                 </button>
               </div>
@@ -912,6 +924,41 @@ export default function AppShell() {
           )}
         </aside>
       </div>
+
+      {confirmDelete && item && (
+        <div
+          className="overlay"
+          // Dismiss only when the press LANDED on the backdrop itself. Closing
+          // on any click that bubbles up means a text selection started inside
+          // the card and released outside it destroys the dialog — the same
+          // reasoning as the site's own gate.
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setConfirmDelete(false);
+          }}
+        >
+          <div className="confirm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+            <div className="confirm-head" id="confirm-title">
+              Delete note
+            </div>
+            <div className="confirm-body">
+              Delete <strong>“{item.title}”</strong>?
+              <p className="confirm-note">
+                This cannot be undone. The audit trail keeps a record that it existed.
+              </p>
+            </div>
+            <div className="confirm-actions">
+              {/* Cancel takes focus, not Delete: the safe option should be the
+                  one a stray Enter or Space lands on. */}
+              <button className="btn" onClick={() => setConfirmDelete(false)} autoFocus>
+                Cancel
+              </button>
+              <button className="btn btn-danger" onClick={deleteItem}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showGraph && activeProjectId && (
         <div className="overlay" onClick={() => setShowGraph(false)}>

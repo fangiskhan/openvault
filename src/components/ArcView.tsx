@@ -57,27 +57,57 @@ export default function ArcView({
     };
   }, [projectId, gscope]);
 
-  // Layout: stable ordering is the whole point, so sort projects by name and
-  // notes by creation time. Kept in a ref for the hit-test on click/hover.
-  const layoutRef = useRef<{ ordered: Node[]; xOf: Map<string, number>; baseY: number; w: number } | null>(null);
+  // Layout and paint are separated because the view animates now: the geometry
+  // only changes when the data, the filters or the canvas size change, while
+  // the frame loop runs continuously. Recomputing the sort and the arc list
+  // sixty times a second would be pure waste.
+  type Arc = {
+    s: string;
+    t: string;
+    x1: number;
+    x2: number;
+    kind: "explicit" | "inferred";
+    cross: boolean;
+    span: number;
+    color: string;
+  };
+  type Scene = {
+    ordered: Node[];
+    xOf: Map<string, number>;
+    neighbours: Map<string, Set<string>>;
+    arcs: Arc[];
+    glowScale: number;
+    degree: Map<string, number>;
+    maxDeg: number;
+    baseY: number;
+    barH: number;
+    padX: number;
+    step: number;
+    squash: number;
+    W: number;
+    H: number;
+  };
+  const sceneRef = useRef<Scene | null>(null);
+  // The hovered id is read by the frame loop, so it lives in a ref as well as
+  // in state: putting it only in state would rebuild the loop on every mouse
+  // move, and putting it only in a ref would never re-render the tooltip.
+  const hoverIdRef = useRef<string | null>(null);
 
-  const draw = useCallback(() => {
+  const build = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !data) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const ctx = canvas.getContext("2d");
+    ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
     const W = rect.width;
     const H = rect.height;
-
-    ctx.fillStyle = "#0a0a0a";
-    ctx.fillRect(0, 0, W, H);
-    if (!data.nodes.length) return;
+    if (!data.nodes.length) {
+      sceneRef.current = null;
+      return;
+    }
 
     const order = new Map(data.projects.map((p, i) => [p.id, i]));
     const ordered = [...data.nodes].sort((a, b) => {
@@ -95,7 +125,6 @@ export default function ArcView({
     const step = usable / Math.max(1, ordered.length - 1 || 1);
     const xOf = new Map<string, number>();
     ordered.forEach((n, i) => xOf.set(n.id, padX + (ordered.length === 1 ? usable / 2 : i * step)));
-    layoutRef.current = { ordered, xOf, baseY, w: W };
 
     const projectOf = new Map(data.nodes.map((n) => [n.id, n.projectId]));
     const degree = new Map<string, number>();
@@ -105,96 +134,280 @@ export default function ArcView({
     }
     const maxDeg = Math.max(1, ...degree.values());
 
-    // Arcs: short intra-project hops sit low, cross-project links sweep high —
-    // so the eye reads reach as relatedness across the whole vault.
     const colorOf = new Map(data.nodes.map((n) => [n.id, n.color]));
-    const prep = (list: Edge[], kind: "explicit" | "inferred") =>
+    const prep = (list: Edge[], kind: "explicit" | "inferred"): Arc[] =>
       list
         .filter((e) => xOf.has(e.source) && xOf.has(e.target))
-        .map((e) => {
-          const x1 = xOf.get(e.source)!;
-          const x2 = xOf.get(e.target)!;
-          return {
-            x1,
-            x2,
-            kind,
-            cross: projectOf.get(e.source) !== projectOf.get(e.target),
-            span: Math.abs(x2 - x1),
-            color: colorOf.get(e.source) ?? "#8b7cf6",
-          };
-        })
+        .map((e) => ({
+          s: e.source,
+          t: e.target,
+          x1: xOf.get(e.source)!,
+          x2: xOf.get(e.target)!,
+          kind,
+          cross: projectOf.get(e.source) !== projectOf.get(e.target),
+          span: Math.abs(xOf.get(e.target)! - xOf.get(e.source)!),
+          color: colorOf.get(e.source) ?? "#8b7cf6",
+        }))
         .filter((e) => (crossOnly ? e.cross : true));
 
-    const edges = [
+    const arcs = [
       ...(showInferred ? prep(data.inferred ?? [], "inferred") : []),
       ...prep(data.edges, "explicit"),
     ].sort((a, b) => a.span - b.span); // long sweeps paint last, on top
 
-    const maxR = usable / 2;
-    const squash = Math.min(1, (baseY - 12) / Math.max(1, maxR));
-
-    ctx.lineCap = "round";
-    for (const e of edges) {
-      const cx = (e.x1 + e.x2) / 2;
-      const rx = e.span / 2;
-      if (rx < 0.5) continue;
-      const [r, g, b] = hexToRgb(e.color);
-      // Explicit links read solid; inferred ones sit behind as a faint weave.
-      // Cross-project arcs are the story either way, so they get more presence.
-      const alpha =
-        e.kind === "inferred" ? (e.cross ? 0.2 : 0.08) : e.cross ? 0.6 : 0.26;
-      ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
-      ctx.lineWidth = e.kind === "inferred" ? 0.7 : e.cross ? 1.5 : 0.9;
-      ctx.beginPath();
-      ctx.ellipse(cx, baseY, rx, rx * squash, 0, Math.PI, Math.PI * 2);
-      ctx.stroke();
+    // Adjacency over the arcs actually on screen, so focusing a note respects
+    // the current filters rather than the raw graph.
+    const neighbours = new Map<string, Set<string>>();
+    for (const a of arcs) {
+      if (!neighbours.has(a.s)) neighbours.set(a.s, new Set());
+      if (!neighbours.has(a.t)) neighbours.set(a.t, new Set());
+      neighbours.get(a.s)!.add(a.t);
+      neighbours.get(a.t)!.add(a.s);
     }
 
-    // Baseline bars: link degree per note, in its project's colour.
-    for (const n of ordered) {
-      const x = xOf.get(n.id)!;
-      const d = degree.get(n.id) ?? 0;
-      const h = 6 + (d / maxDeg) * (barH - 10);
-      const [r, g, b] = hexToRgb(n.color);
-      ctx.fillStyle = `rgba(${r},${g},${b},${d ? 0.9 : 0.35})`;
-      ctx.fillRect(x - Math.max(0.6, step * 0.35), baseY + 2, Math.max(1.2, step * 0.7), h);
-    }
+    // Additive light saturates with density, and this vault draws ~600 explicit
+    // arcs plus ~700 inferred. At full strength the dense half of the diagram
+    // burns out to flat white and the structure — which is the entire point of
+    // an arc plot — disappears. So the bloom is attenuated by how many arcs are
+    // actually competing for the same pixels.
+    const explicitCount = arcs.reduce((n2, a) => n2 + (a.kind === "explicit" ? 1 : 0), 0);
+    const glowScale = Math.max(0.12, Math.min(1, 140 / Math.max(1, explicitCount)));
 
-    ctx.strokeStyle = "rgba(255,255,255,0.25)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padX, baseY + 1.5);
-    ctx.lineTo(W - padX, baseY + 1.5);
-    ctx.stroke();
+    sceneRef.current = {
+      ordered,
+      xOf,
+      neighbours,
+      arcs,
+      glowScale,
+      degree,
+      maxDeg,
+      baseY,
+      barH,
+      padX,
+      step,
+      squash: Math.min(1, (baseY - 12) / Math.max(1, usable / 2)),
+      W,
+      H,
+    };
   }, [data, crossOnly, showInferred]);
 
+  // A point on the arc, as a fraction of the way from source to target. The
+  // arcs are drawn as the upper half of an ellipse, so the parameter is an
+  // angle from PI to 2PI; travelling source-to-target means running it
+  // backwards when the source sits to the right of the target.
+  const pointOn = (a: Arc, u: number, baseY: number, squash: number) => {
+    const cx = (a.x1 + a.x2) / 2;
+    const rx = a.span / 2;
+    const forward = a.x1 <= a.x2 ? u : 1 - u;
+    const ang = Math.PI + forward * Math.PI;
+    return { x: cx + rx * Math.cos(ang), y: baseY + rx * squash * Math.sin(ang) };
+  };
+
   useEffect(() => {
-    draw();
-    const onResize = () => draw();
+    build();
+    const onResize = () => build();
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [draw]);
+
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    // An animation nobody can opt out of is a bug. Honour the OS setting: the
+    // diagram still works as a still image, it just stops sending packets.
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const TRAVEL = 2600; // ms for one dot to cross one arc
+
+    // Bloom, the cheap and correct way. Everything luminous is drawn a second
+    // time into a half-resolution buffer, blurred once, and composited back
+    // with `lighter` (additive). Two things fall out of that for free:
+    // overlapping arcs ADD, so a dense crossing burns brighter than a lone
+    // strand and the plane reads as having depth; and the light bleeds past
+    // its geometry, which is what makes a 1px stroke look like a lit filament
+    // rather than a drawn line.
+    //
+    // Per-shape ctx.shadowBlur would give a similar look and is the obvious
+    // first idea, but it re-blurs on every stroke — hundreds of gaussian
+    // passes a frame. One buffer, one blur.
+    const glowBuf = document.createElement("canvas");
+    const gctx = glowBuf.getContext("2d");
+    const GS = 0.5; // glow buffer scale; blurring at half res is free softness
+
+    let raf = 0;
+    const paint = (now: number) => {
+      raf = requestAnimationFrame(paint);
+      const sc = sceneRef.current;
+      if (!ctx || !canvas) return;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.filter = "none";
+      ctx.fillStyle = "#070709";
+      ctx.fillRect(0, 0, sc?.W ?? canvas.width, sc?.H ?? canvas.height);
+      if (!sc) return;
+
+      const focus = hoverIdRef.current;
+      const near = focus ? sc.neighbours.get(focus) : null;
+      // Focus mode draws a handful of arcs instead of hundreds, so the light
+      // can go back up to full — which is what makes hovering feel like
+      // switching a circuit on rather than merely filtering a list.
+      const lit = focus ? 1 : sc.glowScale;
+
+      if (glowBuf.width !== Math.round(sc.W * GS) || glowBuf.height !== Math.round(sc.H * GS)) {
+        glowBuf.width = Math.round(sc.W * GS);
+        glowBuf.height = Math.round(sc.H * GS);
+      }
+      if (gctx) {
+        gctx.setTransform(GS, 0, 0, GS, 0, 0);
+        gctx.clearRect(0, 0, sc.W, sc.H);
+        gctx.lineCap = "round";
+        gctx.globalCompositeOperation = "lighter";
+      }
+      ctx.lineCap = "round";
+
+      // Pass 1 — geometry, drawn into both the crisp layer and the glow buffer.
+      const dots: Array<{ x: number; y: number; hot: number }> = [];
+      sc.arcs.forEach((e, i) => {
+        const rx = e.span / 2;
+        if (rx < 0.5) return;
+        // Focus mode: only the hovered note's own arcs survive. Everything
+        // else is removed rather than dimmed — a faint arc still reads as a
+        // connection, which is exactly the confusion this is meant to clear.
+        const mine = !focus || e.s === focus || e.t === focus;
+        if (focus && !mine) return;
+
+        const [r, g, b] = hexToRgb(e.color);
+        const base = e.kind === "inferred" ? (e.cross ? 0.2 : 0.08) : e.cross ? 0.6 : 0.26;
+        const alpha = focus ? Math.min(1, base * 2.2 + 0.25) : base;
+        const width = (e.kind === "inferred" ? 0.7 : e.cross ? 1.5 : 0.9) * (focus ? 1.6 : 1);
+        const cx = (e.x1 + e.x2) / 2;
+
+        const arcPath = (c: CanvasRenderingContext2D) => {
+          c.beginPath();
+          c.ellipse(cx, sc.baseY, rx, rx * sc.squash, 0, Math.PI, Math.PI * 2);
+          c.stroke();
+        };
+
+        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+        ctx.lineWidth = width;
+        arcPath(ctx);
+
+        // Only explicit links are lit. The inferred weave is 700-odd arcs of
+        // "these two notes share vocabulary" — glowing them contributed most
+        // of the white-out and none of the meaning, so they stay as unlit
+        // thread in the crisp layer.
+        if (gctx && e.kind === "explicit") {
+          // Fatter and brighter in the glow buffer: the blur is what turns
+          // this into diffusion rather than a second, thicker line.
+          gctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, alpha * 0.8 * lit)})`;
+          gctx.lineWidth = width * (focus ? 3.6 : 2.6);
+          arcPath(gctx);
+        }
+
+        // The travelling dot: a note handing something to the note it links to.
+        // Inferred arcs stay quiet — they are a suggestion, not traffic — and
+        // staggering by the golden ratio keeps the dots from marching in step.
+        if (still || e.kind === "inferred") return;
+        const u = (now / TRAVEL + ((i * 0.6180339887) % 1)) % 1;
+        const p = pointOn(e, u, sc.baseY, sc.squash);
+        dots.push({ x: p.x, y: p.y, hot: focus ? 1 : 0.75 });
+      });
+
+      // Bars, also lit.
+      for (const n of sc.ordered) {
+        const x = sc.xOf.get(n.id)!;
+        const d = sc.degree.get(n.id) ?? 0;
+        const h = 6 + (d / sc.maxDeg) * (sc.barH - 10);
+        const [r, g, b] = hexToRgb(n.color);
+        const related = !focus || n.id === focus || near?.has(n.id);
+        // Unconnected notes stay faintly visible rather than going black: the
+        // left-to-right ordering IS the x-axis, and blanking it entirely
+        // removes the context that makes a connection meaningful.
+        const a = focus ? (n.id === focus ? 1 : related ? 0.9 : 0.2) : d ? 0.9 : 0.35;
+        const bx = x - Math.max(0.6, sc.step * 0.35);
+        const bw = Math.max(1.2, sc.step * 0.7);
+        ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+        ctx.fillRect(bx, sc.baseY + 2, bw, h);
+        if (gctx && a > 0.3) {
+          gctx.fillStyle = `rgba(${r},${g},${b},${a * 0.7 * lit})`;
+          gctx.fillRect(bx - bw * 0.5, sc.baseY + 2, bw * 2, h);
+        }
+      }
+
+      // Dots last so their light sits on top of every arc.
+      for (const p of dots) {
+        if (gctx) {
+          // Dots keep more of their glow than the arcs do: they are the moving
+          // element, there are far fewer of them lit at once, and their halo is
+          // what sells "a packet of light travelling the wire".
+          gctx.fillStyle = `rgba(255,255,255,${0.9 * p.hot * Math.max(0.45, lit)})`;
+          gctx.beginPath();
+          gctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+          gctx.fill();
+        }
+        ctx.fillStyle = `rgba(255,255,255,${0.22 * p.hot})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${p.hot})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Pass 2 — the bloom itself. Two composites at different radii: a tight
+      // one for the filament's core heat, a wide one for the haze around it.
+      if (gctx) {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.filter = "blur(3px)";
+        ctx.globalAlpha = 0.55;
+        ctx.drawImage(glowBuf, 0, 0, sc.W, sc.H);
+        ctx.filter = "blur(13px)";
+        ctx.globalAlpha = 0.4;
+        ctx.drawImage(glowBuf, 0, 0, sc.W, sc.H);
+        ctx.restore();
+      }
+
+      ctx.globalCompositeOperation = "source-over";
+      ctx.filter = "none";
+      ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sc.padX, sc.baseY + 1.5);
+      ctx.lineTo(sc.W - sc.padX, sc.baseY + 1.5);
+      ctx.stroke();
+    };
+    raf = requestAnimationFrame(paint);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [build]);
 
   // Returns the note under the cursor plus its canvas-relative x, so the
   // tooltip can be positioned without reading a ref during render.
   const nodeAt = (clientX: number, clientY: number): { node: Node; x: number } | null => {
     const canvas = canvasRef.current;
-    const layout = layoutRef.current;
-    if (!canvas || !layout) return null;
+    const sc = sceneRef.current;
+    if (!canvas || !sc) return null;
     const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    if (y < layout.baseY - 6) return null; // only the baseline strip is interactive
+    if (y < sc.baseY - 6) return null; // only the baseline strip is interactive
     let best: Node | null = null;
     let bestD = 8;
-    for (const n of layout.ordered) {
-      const d = Math.abs((layout.xOf.get(n.id) ?? -999) - x);
+    for (const n of sc.ordered) {
+      const d = Math.abs((sc.xOf.get(n.id) ?? -999) - x);
       if (d < bestD) {
         bestD = d;
         best = n;
       }
     }
     return best ? { node: best, x } : null;
+  };
+
+  // Both, deliberately: the ref drives the frame loop without re-rendering on
+  // every mouse move, the state drives the tooltip.
+  const setHovered = (hit: { node: Node; x: number } | null) => {
+    hoverIdRef.current = hit?.node.id ?? null;
+    setHover(hit ? { x: hit.x, node: hit.node } : null);
   };
 
   const counts = data
@@ -236,8 +449,8 @@ export default function ArcView({
         <canvas
           ref={canvasRef}
           className="arc-canvas"
-          onMouseMove={(e) => setHover(nodeAt(e.clientX, e.clientY))}
-          onMouseLeave={() => setHover(null)}
+          onMouseMove={(e) => setHovered(nodeAt(e.clientX, e.clientY))}
+          onMouseLeave={() => setHovered(null)}
           onClick={(e) => {
             const hit = nodeAt(e.clientX, e.clientY);
             if (hit) onOpenRef.current(hit.node.id);

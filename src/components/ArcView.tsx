@@ -76,6 +76,7 @@ export default function ArcView({
     xOf: Map<string, number>;
     neighbours: Map<string, Set<string>>;
     arcs: Arc[];
+    angleLut: Float64Array;
     glowScale: number;
     degree: Map<string, number>;
     maxDeg: number;
@@ -173,11 +174,46 @@ export default function ArcView({
     const explicitCount = arcs.reduce((n2, a) => n2 + (a.kind === "explicit" ? 1 : 0), 0);
     const glowScale = Math.max(0.12, Math.min(1, 140 / Math.max(1, explicitCount)));
 
+    // Even spacing along an ELLIPSE needs more than even spacing in angle:
+    // stepping theta uniformly is constant-speed only on a circle, and these
+    // arcs run at a squash of roughly 0.89, so a dot would cover ~12% more
+    // ground per frame at the apex than at the ends. Since every arc is the
+    // same ellipse scaled, one lookup table serves all of them: length
+    // fraction in, angle fraction out.
+    const squash = Math.min(1, (baseY - 12) / Math.max(1, usable / 2));
+    const LUT = 64;
+    const angleLut = new Float64Array(LUT + 1);
+    {
+      const M = 512;
+      const cum = new Float64Array(M + 1);
+      let px = Math.cos(Math.PI);
+      let py = squash * Math.sin(Math.PI);
+      for (let m = 1; m <= M; m++) {
+        const th = Math.PI + (m / M) * Math.PI;
+        const cxx = Math.cos(th);
+        const cyy = squash * Math.sin(th);
+        cum[m] = cum[m - 1] + Math.hypot(cxx - px, cyy - py);
+        px = cxx;
+        py = cyy;
+      }
+      const total = cum[M] || 1;
+      let m = 1;
+      for (let j = 0; j <= LUT; j++) {
+        const target = (j / LUT) * total;
+        while (m < M && cum[m] < target) m++;
+        const c0 = cum[m - 1];
+        const c1 = cum[m];
+        const f = c1 > c0 ? (target - c0) / (c1 - c0) : 0;
+        angleLut[j] = (m - 1 + f) / M;
+      }
+    }
+
     sceneRef.current = {
       ordered,
       xOf,
       neighbours,
       arcs,
+      angleLut,
       glowScale,
       degree,
       maxDeg,
@@ -185,7 +221,7 @@ export default function ArcView({
       barH,
       padX,
       step,
-      squash: Math.min(1, (baseY - 12) / Math.max(1, usable / 2)),
+      squash,
       W,
       H,
     };
@@ -199,12 +235,18 @@ export default function ArcView({
   // both directions because a link between two notes is not one-way — each end
   // cites the other — and a single direction read as a conveyor belt rather
   // than a conversation.
-  const pointOn = (a: Arc, u: number, baseY: number, squash: number, back: boolean) => {
+  const pointOn = (a: Arc, u: number, baseY: number, squash: number, back: boolean, lut: Float64Array) => {
     const cx = (a.x1 + a.x2) / 2;
     const rx = a.span / 2;
     const along = back ? 1 - u : u;
     const forward = a.x1 <= a.x2 ? along : 1 - along;
-    const ang = Math.PI + forward * Math.PI;
+    // `forward` is a fraction of ARC LENGTH; the table converts it to the
+    // fraction of angle that lands there.
+    const t = Math.max(0, Math.min(0.999999, forward)) * (lut.length - 1);
+    const i0 = Math.floor(t);
+    const frac = t - i0;
+    const af = lut[i0] + (lut[Math.min(lut.length - 1, i0 + 1)] - lut[i0]) * frac;
+    const ang = Math.PI + af * Math.PI;
     return { x: cx + rx * Math.cos(ang), y: baseY + rx * squash * Math.sin(ang) };
   };
 
@@ -218,7 +260,16 @@ export default function ArcView({
     // An animation nobody can opt out of is a bug. Honour the OS setting: the
     // diagram still works as a still image, it just stops sending packets.
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    const TRAVEL = 2600; // ms for one dot to cross one arc
+    // Constant SPEED, not constant duration. Giving every arc the same period
+    // meant a long cross-project sweep covered several times the distance of a
+    // short hop in the same time, so packets appeared to race on the big arcs
+    // and crawl on the small ones. Period is derived from arc length instead.
+    const SPEED = 95; // px per second, the same on every wire
+    // Ramanujan's ellipse perimeter, halved: these arcs are the upper half of
+    // an ellipse, and the earlier 1.6*(rx+ry) guess was wrong enough to matter
+    // once length started driving timing rather than just dot spacing.
+    const arcLength = (a: number, b: number) =>
+      (Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)))) / 2;
 
     // Bloom, the cheap and correct way. Everything luminous is drawn a second
     // time into a half-resolution buffer, blurred once, and composited back
@@ -315,13 +366,18 @@ export default function ArcView({
         // keep the frame budget sane, since inferred arcs outnumber explicit
         // ones here (716 to 595).
         const weak = e.kind === "inferred";
-        const arcLen = 1.6 * (rx + rx * sc.squash);
+        const arcLen = arcLength(rx, rx * sc.squash);
         const count = Math.max(1, Math.min(weak ? 3 : 6, Math.round(arcLen / (weak ? 190 : 105))));
+        // Seconds to cross THIS arc at the shared speed. Weak links used to run
+        // slower as a second weakness cue; that reintroduced exactly the uneven
+        // pace this change removes, and brightness, size and density already
+        // carry the signal.
+        const period = Math.max(0.4, arcLen / SPEED);
         for (let k = 0; k < count; k++) {
-          const u = (now / TRAVEL * (weak ? 0.7 : 1) + ((i * 0.6180339887) % 1) + k / count) % 1;
+          const u = (now / 1000 / period + ((i * 0.6180339887) % 1) + k / count) % 1;
           // Alternate direction per dot: two-way traffic for free, rather than
           // doubling the dot count to get a second stream.
-          const p = pointOn(e, u, sc.baseY, sc.squash, k % 2 === 1);
+          const p = pointOn(e, u, sc.baseY, sc.squash, k % 2 === 1, sc.angleLut);
           dots.push({ x: p.x, y: p.y, hot: (focus ? 1 : 0.75) * (weak ? 0.4 : 1), weak });
         }
       });
@@ -358,13 +414,13 @@ export default function ArcView({
           // dots are for — the sense of discrete packets in motion.
           gctx.fillStyle = `rgba(255,255,255,${0.5 * p.hot * Math.max(0.5, lit)})`;
           gctx.beginPath();
-          gctx.arc(p.x, p.y, 2.6, 0, Math.PI * 2);
+          gctx.arc(p.x, p.y, 2.08, 0, Math.PI * 2);
           gctx.fill();
         }
         // One crisp core, no mid halo: the bloom pass supplies the softness.
         ctx.fillStyle = `rgba(255,255,255,${0.92 * p.hot})`;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.weak ? 0.9 : 1.3, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.weak ? 0.72 : 1.04, 0, Math.PI * 2);
         ctx.fill();
       }
 

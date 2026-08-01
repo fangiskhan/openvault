@@ -824,8 +824,24 @@ export default function AppShell() {
                     </button>
                   </div>
                 )}
-                <button className="btn-ghost" onClick={() => setConfirmDelete(true)} title="Delete">
-                  🗑
+                <button
+                  className="icon-btn"
+                  onClick={() => setConfirmDelete(true)}
+                  title="Delete note"
+                  aria-label="Delete note"
+                >
+                  {/* Drawn rather than an emoji: 🗑 renders differently on every
+                      platform and arrives rounded and fuzzy, which is the one
+                      thing this design language never is. Square caps, 2px
+                      stroke, currentColor so it inherits the hover flip. */}
+                  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <path
+                      d="M2.5 4h11M6 4V2.2h4V4M4.2 4l.8 9.8h6l.8-9.8M6.6 6.4v5M9.4 6.4v5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                    />
+                  </svg>
                 </button>
               </div>
 

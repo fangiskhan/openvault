@@ -616,6 +616,16 @@ textarea {
   flex-direction: column;
   box-shadow: 12px 12px 0 0 var(--ink), 16px 16px 0 0 var(--magenta);
 }
+/* The arc diagram is a wide picture and the default dialog width was cramping
+   it. Its own size, not every dialog's: 920 -> 1200px, and a taller cap so the
+   canvas below can grow with it. */
+.modal--graph {
+  width: min(1200px, 96vw);
+  max-height: 94vh;
+}
+.modal--graph .arc-canvas {
+  height: 74vh;
+}
 .modal-head {
   display: flex;
   align-items: center;

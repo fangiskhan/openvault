@@ -915,7 +915,7 @@ export default function AppShell() {
 
       {showGraph && activeProjectId && (
         <div className="overlay" onClick={() => setShowGraph(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal--graph" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <span>Graph</span>
               <div className="spacer" />

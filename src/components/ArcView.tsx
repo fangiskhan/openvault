@@ -438,13 +438,15 @@ export default function ArcView({
           // dots are for — the sense of discrete packets in motion.
           gctx.fillStyle = `rgba(255,255,255,${0.5 * p.hot * Math.max(0.5, lit)})`;
           gctx.beginPath();
-          gctx.arc(p.x, p.y, 2.08, 0, Math.PI * 2);
+          gctx.arc(p.x, p.y, 2.6, 0, Math.PI * 2);
           gctx.fill();
         }
         // One crisp core, no mid halo: the bloom pass supplies the softness.
+        // Back to the pre-shrink radii — the dialog is a third wider now, so
+        // the same dot covers proportionally less of the stage than it did.
         ctx.fillStyle = `rgba(255,255,255,${0.92 * p.hot})`;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.weak ? 0.72 : 1.04, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.weak ? 0.9 : 1.3, 0, Math.PI * 2);
         ctx.fill();
       }
 

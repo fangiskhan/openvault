@@ -43,7 +43,19 @@ body {
 }
 body {
   margin: 0;
-  background: var(--bg);
+  /* Background-05 under the SPX halftone, so the vault and the website read as
+     one product. Layer order is top-first in CSS: dots over skyline over paper.
+     `fixed` on both so neither slides under scrolling content, and the paper
+     colour stays underneath as the fallback while the image loads.
+
+     The halftone is the site's own supporting texture, copied exactly rather
+     than eyeballed — radial dot, 7% ink, 1px, on a 12px grid. Recorded in
+     "SPX6900 visual language - the five rules" in the website design css
+     project. */
+  background:
+    radial-gradient(circle, rgba(10, 10, 10, 0.07) 1px, transparent 1px) 0 0 / 12px 12px repeat fixed,
+    url("/bg/Background-05.webp") center / cover no-repeat fixed,
+    var(--bg);
   color: var(--text);
   font-family: var(--font-geist-sans, ui-sans-serif, system-ui, sans-serif);
   font-size: 14px;

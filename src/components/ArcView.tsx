@@ -286,6 +286,16 @@ export default function ArcView({
     const gctx = glowBuf.getContext("2d");
     const GS = 0.5; // glow buffer scale; blurring at half res is free softness
 
+    // The plate the arcs are drawn on. A canvas cannot take a CSS background,
+    // so it is painted as the first thing each frame; until it decodes, the
+    // flat ink colour stands in, which is what the view looked like before.
+    const plate = new Image();
+    let plateReady = false;
+    plate.onload = () => {
+      plateReady = true;
+    };
+    plate.src = "/bg/game_box_background.webp";
+
     let raf = 0;
     const paint = (now: number) => {
       raf = requestAnimationFrame(paint);
@@ -293,8 +303,22 @@ export default function ArcView({
       if (!ctx || !canvas) return;
       ctx.globalCompositeOperation = "source-over";
       ctx.filter = "none";
+      const cw = sc?.W ?? canvas.width;
+      const ch = sc?.H ?? canvas.height;
       ctx.fillStyle = "#070709";
-      ctx.fillRect(0, 0, sc?.W ?? canvas.width, sc?.H ?? canvas.height);
+      ctx.fillRect(0, 0, cw, ch);
+      if (plateReady) {
+        // Cover-fit and centre: the plate is square and the stage is wide, so
+        // scaling to fit would letterbox it against the ink.
+        const s = Math.max(cw / plate.width, ch / plate.height);
+        const dw = plate.width * s;
+        const dh = plate.height * s;
+        ctx.drawImage(plate, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+        // Knock it back so the arcs stay the brightest thing on the stage —
+        // it is scenery, and additive glow over a busy plate loses contrast.
+        ctx.fillStyle = "rgba(7,7,9,0.45)";
+        ctx.fillRect(0, 0, cw, ch);
+      }
       if (!sc) return;
 
       const focus = hoverIdRef.current;

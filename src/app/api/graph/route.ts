@@ -4,12 +4,19 @@ import { scopeProjectIds } from "@/lib/projects";
 import { searchScopeSchema, CONTENT_TYPES } from "@/lib/validation";
 import { buildCorpus, cosine } from "@/lib/related";
 
-// Distinct, dark-theme-friendly hues used to break ties when projects share a
-// stored color (imported projects all default to the same one), so the
-// whole-vault graph can actually be read as "one color per project".
+// Distinct hues used to break ties when projects share a stored color
+// (imported projects all default to the same one), so the whole-vault graph
+// can be read as "one color per project".
+//
+// Neon rather than the previous One Dark-ish set. Those were mid-lightness and
+// mid-chroma — "pastel but saturated" — which reads as muted against both the
+// paper UI and the dark graph plate, and gives the arc view's additive bloom
+// almost nothing to work with. These are full-chroma and bright, in the same
+// family as the SPX accents (#e5ff1a / #ff1a66 / #00e5ff), spaced roughly
+// evenly around the wheel so neighbours stay tellable apart.
 const GRAPH_PALETTE = [
-  "#8b7cf6", "#6aa3ff", "#5fb3a1", "#d08770", "#e0a458", "#c678dd",
-  "#56b6c2", "#e06c9f", "#98c379", "#7aa2f7", "#bb9af7", "#d19a66",
+  "#00e5ff", "#ff1a66", "#c6ff00", "#a64dff", "#ffb300", "#00ffa3",
+  "#ff00e5", "#2b7fff", "#ff5c00", "#66ff33", "#ffe600", "#ff2d55",
 ];
 
 function hashHue(s: string): number {
@@ -104,7 +111,9 @@ export async function GET(req: Request) {
   let next = 0;
   for (const p of deferred) {
     while (next < GRAPH_PALETTE.length && used.has(GRAPH_PALETTE[next])) next++;
-    const color = next < GRAPH_PALETTE.length ? GRAPH_PALETTE[next] : `hsl(${hashHue(p.id)}, 62%, 62%)`;
+    // Past the palette, fall back to a hashed hue — at full chroma, so an
+    // overflow project does not suddenly look washed out next to the rest.
+    const color = next < GRAPH_PALETTE.length ? GRAPH_PALETTE[next] : `hsl(${hashHue(p.id)}, 100%, 60%)`;
     used.add(color);
     colorByProject.set(p.id, color);
   }

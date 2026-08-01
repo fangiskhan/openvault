@@ -195,10 +195,15 @@ export default function ArcView({
   // arcs are drawn as the upper half of an ellipse, so the parameter is an
   // angle from PI to 2PI; travelling source-to-target means running it
   // backwards when the source sits to the right of the target.
-  const pointOn = (a: Arc, u: number, baseY: number, squash: number) => {
+  // `back` sends the packet the other way down the same wire. Traffic runs in
+  // both directions because a link between two notes is not one-way — each end
+  // cites the other — and a single direction read as a conveyor belt rather
+  // than a conversation.
+  const pointOn = (a: Arc, u: number, baseY: number, squash: number, back: boolean) => {
     const cx = (a.x1 + a.x2) / 2;
     const rx = a.span / 2;
-    const forward = a.x1 <= a.x2 ? u : 1 - u;
+    const along = back ? 1 - u : u;
+    const forward = a.x1 <= a.x2 ? along : 1 - along;
     const ang = Math.PI + forward * Math.PI;
     return { x: cx + rx * Math.cos(ang), y: baseY + rx * squash * Math.sin(ang) };
   };
@@ -261,7 +266,7 @@ export default function ArcView({
       ctx.lineCap = "round";
 
       // Pass 1 — geometry, drawn into both the crisp layer and the glow buffer.
-      const dots: Array<{ x: number; y: number; hot: number }> = [];
+      const dots: Array<{ x: number; y: number; hot: number; weak: boolean }> = [];
       sc.arcs.forEach((e, i) => {
         const rx = e.span / 2;
         if (rx < 0.5) return;
@@ -294,18 +299,31 @@ export default function ArcView({
         if (gctx && e.kind === "explicit") {
           // Fatter and brighter in the glow buffer: the blur is what turns
           // this into diffusion rather than a second, thicker line.
-          gctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, alpha * 0.8 * lit)})`;
-          gctx.lineWidth = width * (focus ? 3.6 : 2.6);
+          gctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, alpha * 0.42 * lit)})`;
+          gctx.lineWidth = width * (focus ? 2.4 : 1.8);
           arcPath(gctx);
         }
 
         // The travelling dot: a note handing something to the note it links to.
         // Inferred arcs stay quiet — they are a suggestion, not traffic — and
         // staggering by the golden ratio keeps the dots from marching in step.
-        if (still || e.kind === "inferred") return;
-        const u = (now / TRAVEL + ((i * 0.6180339887) % 1)) % 1;
-        const p = pointOn(e, u, sc.baseY, sc.squash);
-        dots.push({ x: p.x, y: p.y, hot: focus ? 1 : 0.75 });
+        if (still) return;
+        // Inferred links carry traffic too, but thinner and fainter: they are
+        // "these two notes share vocabulary", a weaker claim than "this note
+        // cites that one", and the animation should say so. Sparser spacing
+        // and a lower cap keep the weaker channel visually subordinate — and
+        // keep the frame budget sane, since inferred arcs outnumber explicit
+        // ones here (716 to 595).
+        const weak = e.kind === "inferred";
+        const arcLen = 1.6 * (rx + rx * sc.squash);
+        const count = Math.max(1, Math.min(weak ? 3 : 6, Math.round(arcLen / (weak ? 190 : 105))));
+        for (let k = 0; k < count; k++) {
+          const u = (now / TRAVEL * (weak ? 0.7 : 1) + ((i * 0.6180339887) % 1) + k / count) % 1;
+          // Alternate direction per dot: two-way traffic for free, rather than
+          // doubling the dot count to get a second stream.
+          const p = pointOn(e, u, sc.baseY, sc.squash, k % 2 === 1);
+          dots.push({ x: p.x, y: p.y, hot: (focus ? 1 : 0.75) * (weak ? 0.4 : 1), weak });
+        }
       });
 
       // Bars, also lit.
@@ -331,22 +349,22 @@ export default function ArcView({
 
       // Dots last so their light sits on top of every arc.
       for (const p of dots) {
-        if (gctx) {
-          // Dots keep more of their glow than the arcs do: they are the moving
-          // element, there are far fewer of them lit at once, and their halo is
-          // what sells "a packet of light travelling the wire".
-          gctx.fillStyle = `rgba(255,255,255,${0.9 * p.hot * Math.max(0.45, lit)})`;
+        // Weak-link packets get no halo at all — only explicit traffic is lit.
+        // That is both the honest signal (a lit wire means a real citation)
+        // and what keeps ~700 inferred arcs from costing a second glow pass.
+        if (gctx && !p.weak) {
+          // A small, tight halo. With several dots per arc a wide one merges
+          // its neighbours into a glowing rope, which loses the very thing the
+          // dots are for — the sense of discrete packets in motion.
+          gctx.fillStyle = `rgba(255,255,255,${0.5 * p.hot * Math.max(0.5, lit)})`;
           gctx.beginPath();
-          gctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+          gctx.arc(p.x, p.y, 2.6, 0, Math.PI * 2);
           gctx.fill();
         }
-        ctx.fillStyle = `rgba(255,255,255,${0.22 * p.hot})`;
+        // One crisp core, no mid halo: the bloom pass supplies the softness.
+        ctx.fillStyle = `rgba(255,255,255,${0.92 * p.hot})`;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 3.4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = `rgba(255,255,255,${p.hot})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 1.4, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.weak ? 0.9 : 1.3, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -356,10 +374,10 @@ export default function ArcView({
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
         ctx.filter = "blur(3px)";
-        ctx.globalAlpha = 0.55;
+        ctx.globalAlpha = 0.34;
         ctx.drawImage(glowBuf, 0, 0, sc.W, sc.H);
-        ctx.filter = "blur(13px)";
-        ctx.globalAlpha = 0.4;
+        ctx.filter = "blur(12px)";
+        ctx.globalAlpha = 0.2;
         ctx.drawImage(glowBuf, 0, 0, sc.W, sc.H);
         ctx.restore();
       }

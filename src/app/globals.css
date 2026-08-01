@@ -616,12 +616,16 @@ textarea {
   flex-direction: column;
   box-shadow: 12px 12px 0 0 var(--ink), 16px 16px 0 0 var(--magenta);
 }
-/* A square icon control, sized and bordered to match the .scope segmented
-   box it sits beside. The delete button used to be a borderless ghost, and in
-   a UI where every control is a hard-edged box with an offset shadow, a bare
-   glyph reads as decoration rather than something you can press. Magenta
-   arrives on hover only: the action is destructive, so it should be findable
-   without being the loudest thing in the header. */
+/* A square icon control, sized and bordered to match the .scope segmented box
+   it sits beside. The delete button used to be a borderless ghost, and in a UI
+   where every control is a hard-edged box a bare glyph reads as decoration
+   rather than something you can press.
+
+   NO offset shadow, deliberately: the stacked-card look belongs to the primary
+   controls, and repeating it on a single destructive icon gives that icon the
+   same weight as the READ/EDIT toggle it sits next to. The border alone is
+   enough to say "button". Magenta arrives on hover only — the action should be
+   findable without being the loudest thing in the header. */
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -633,8 +637,8 @@ textarea {
   border-radius: 0;
   background: var(--bg-panel);
   color: var(--text-muted);
-  box-shadow: 3px 3px 0 0 var(--ink);
-  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease, color 0.12s ease;
+  box-shadow: none;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .icon-btn:hover {
   /* White on magenta here, not the accent-ink black: this is a hover state,
@@ -642,12 +646,12 @@ textarea {
      accent plates like the dialog's Delete button. */
   background: var(--magenta);
   color: #fff;
-  transform: translate(-2px, -2px);
-  box-shadow: 5px 5px 0 0 var(--ink);
+  transform: none;
+  box-shadow: none;
 }
 .icon-btn:active {
-  transform: translate(0, 0);
-  box-shadow: 0 0 0 0 var(--ink);
+  transform: none;
+  box-shadow: none;
 }
 
 /* ---------- confirm dialog ---------- */

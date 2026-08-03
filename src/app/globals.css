@@ -1057,6 +1057,32 @@ textarea {
    arc peaks well below this band. */
 /* Specificity note: .graph-legend is declared later in this file, so the
    override needs both classes to win the flex-direction tie. */
+/* Legend + hover read-out as one top-anchored column. The read-out used to sit
+   at the cursor's x along the bottom, which clipped long titles against the
+   right edge of the stage. Centred under the legend it gets the full width and
+   never moves, so the eye always knows where to look. pointer-events: none so
+   the strip never steals a hover from the canvas underneath. */
+.arc-top {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+/* Both children flow inside .arc-top now instead of positioning themselves. */
+.arc-top .graph-legend.arc-legend {
+  position: static;
+  align-self: stretch;
+}
+.arc-top .arc-tip {
+  position: static;
+  max-width: 100%;
+}
+
 .graph-legend.arc-legend {
   top: 12px;
   left: 12px;

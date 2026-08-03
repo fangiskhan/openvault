@@ -561,19 +561,26 @@ export default function ArcView({
             <p className="empty">No notes in this scope yet.</p>
           </div>
         )}
-        {hover && (
-          <div className="arc-tip" style={{ left: Math.max(8, hover.x - 40), bottom: 8 }}>
-            <span className="cdot" style={{ background: hover.node.color }} /> {hover.node.label}
+        {/* Legend and hover read-out share one top-anchored column, so the
+            read-out always lands directly under the legend however many rows
+            the legend wraps to. It used to be positioned at the cursor's x
+            along the bottom, which meant a title hovered near the right edge
+            was clipped by the stage — the further right, the more was lost. */}
+        <div className="arc-top">
+          <div className="graph-legend arc-legend">
+            <div className="graph-legend-title">Projects (left to right)</div>
+            {data?.projects.map((p) => (
+              <div key={p.id} className="graph-legend-item">
+                <span className="cdot" style={{ background: p.color }} />
+                <span className="truncate">{p.name}</span>
+              </div>
+            ))}
           </div>
-        )}
-        <div className="graph-legend arc-legend">
-          <div className="graph-legend-title">Projects (left to right)</div>
-          {data?.projects.map((p) => (
-            <div key={p.id} className="graph-legend-item">
-              <span className="cdot" style={{ background: p.color }} />
-              <span className="truncate">{p.name}</span>
+          {hover && (
+            <div className="arc-tip">
+              <span className="cdot" style={{ background: hover.node.color }} /> {hover.node.label}
             </div>
-          ))}
+          )}
         </div>
       </div>
       <p className="empty">

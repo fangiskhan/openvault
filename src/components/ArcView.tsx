@@ -394,7 +394,16 @@ export default function ArcView({
         // one project, where the blend would be a byte-identical no-op), and
         // the arc must be explicit — the inferred weave draws at 8-20% opacity
         // where a two-tone blend is invisible against the plate.
-        const twoTone = e.kind === "explicit" && e.colorA !== e.colorB;
+        // Gradients cost real per-pixel work, so the dense unfocused view only
+        // gives one to arcs that visibly show it: both ends must differ (most
+        // arcs join notes inside one project, where the blend is a
+        // byte-identical no-op) and the arc must be explicit, since the
+        // inferred weave sits at 8-20% opacity where a blend cannot be seen.
+        //
+        // Focus mode drops both halves of that reasoning: alpha is boosted to
+        // ~0.7 so an inferred arc is now plainly visible, and only a dozen arcs
+        // are drawn at all, so the cost the optimisation was avoiding is gone.
+        const twoTone = e.colorA !== e.colorB && (!!focus || e.kind === "explicit");
 
         ctx.globalAlpha = alpha;
         ctx.strokeStyle = twoTone ? gradient(ctx, "grad") : e.colorA;

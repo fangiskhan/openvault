@@ -69,7 +69,17 @@ export default function ArcView({
     kind: "explicit" | "inferred";
     cross: boolean;
     span: number;
-    color: string;
+    // Both ends' colours. A cross-project arc is drawn as a gradient between
+    // them, so the link reads as "from this project to that one" rather than
+    // taking the source's colour and implying it belongs to one side.
+    colorA: string;
+    colorB: string;
+    // Gradients are cached per canvas — one for the crisp layer, one for the
+    // glow buffer, since a CanvasGradient belongs to the context that made it.
+    // Arc objects are rebuilt whenever the layout changes, so these expire on
+    // their own and never go stale against new coordinates.
+    grad?: CanvasGradient;
+    gradGlow?: CanvasGradient;
   };
   type Scene = {
     ordered: Node[];
@@ -147,7 +157,8 @@ export default function ArcView({
           kind,
           cross: projectOf.get(e.source) !== projectOf.get(e.target),
           span: Math.abs(xOf.get(e.target)! - xOf.get(e.source)!),
-          color: colorOf.get(e.source) ?? "#8b7cf6",
+          colorA: colorOf.get(e.source) ?? "#8b7cf6",
+          colorB: colorOf.get(e.target) ?? "#8b7cf6",
         }))
         .filter((e) => (crossOnly ? e.cross : true));
 
@@ -351,7 +362,6 @@ export default function ArcView({
         const mine = !focus || e.s === focus || e.t === focus;
         if (focus && !mine) return;
 
-        const [r, g, b] = hexToRgb(e.color);
         const base = e.kind === "inferred" ? (e.cross ? 0.2 : 0.08) : e.cross ? 0.6 : 0.26;
         const alpha = focus ? Math.min(1, base * 2.2 + 0.25) : base;
         const width = (e.kind === "inferred" ? 0.7 : e.cross ? 1.5 : 0.9) * (focus ? 1.6 : 1);
@@ -363,9 +373,34 @@ export default function ArcView({
           c.stroke();
         };
 
-        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+        // Built from x1 to x2 — the SOURCE end to the TARGET end — so the
+        // colour runs in the link's own direction whichever way round the two
+        // notes sit. Opacity is applied through globalAlpha rather than baked
+        // into the stops, which is what lets one gradient be reused across
+        // frames and across focus states.
+        const gradient = (c: CanvasRenderingContext2D, key: "grad" | "gradGlow") => {
+          let g = e[key];
+          if (!g) {
+            g = c.createLinearGradient(e.x1, 0, e.x2, 0);
+            g.addColorStop(0, e.colorA);
+            g.addColorStop(1, e.colorB);
+            e[key] = g;
+          }
+          return g;
+        };
+
+        // Gradients cost real per-pixel work, so only the arcs that actually
+        // show one get it: both ends must differ (most arcs join notes inside
+        // one project, where the blend would be a byte-identical no-op), and
+        // the arc must be explicit — the inferred weave draws at 8-20% opacity
+        // where a two-tone blend is invisible against the plate.
+        const twoTone = e.kind === "explicit" && e.colorA !== e.colorB;
+
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = twoTone ? gradient(ctx, "grad") : e.colorA;
         ctx.lineWidth = width;
         arcPath(ctx);
+        ctx.globalAlpha = 1;
 
         // Only explicit links are lit. The inferred weave is 700-odd arcs of
         // "these two notes share vocabulary" — glowing them contributed most
@@ -374,9 +409,11 @@ export default function ArcView({
         if (gctx && e.kind === "explicit") {
           // Fatter and brighter in the glow buffer: the blur is what turns
           // this into diffusion rather than a second, thicker line.
-          gctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, alpha * 0.42 * lit)})`;
+          gctx.globalAlpha = Math.min(1, alpha * 0.42 * lit);
+          gctx.strokeStyle = twoTone ? gradient(gctx, "gradGlow") : e.colorA;
           gctx.lineWidth = width * (focus ? 2.4 : 1.8);
           arcPath(gctx);
+          gctx.globalAlpha = 1;
         }
 
         // The travelling dot: a note handing something to the note it links to.

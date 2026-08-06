@@ -1081,6 +1081,29 @@ export default function AppShell() {
                 <code>--header &quot;Authorization: Bearer ovk_…&quot;</code> — create one under <strong>Accounts</strong>.
               </p>
 
+              <h4 className="rail-h">Codex</h4>
+              {(() => {
+                const url = (origin || "http://localhost:6900") + "/api/mcp";
+                // Codex takes the NAME of an env var, not the token itself, so
+                // the two lines have to travel together — the command alone
+                // authenticates as nobody.
+                const cmd = `codex mcp add openvault --url ${url} --bearer-token-env-var OPENVAULT_TOKEN`;
+                return (
+                  <div className="copyrow">
+                    <code className="codeblock">{cmd}</code>
+                    <button className="btn" onClick={() => copy(cmd, "codex")}>
+                      {copied === "codex" ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                );
+              })()}
+              <p className="empty" style={{ margin: "6px 0 14px" }}>
+                Codex reads the token from an <em>environment variable</em>, not the flag — set{" "}
+                <code>OPENVAULT_TOKEN=ovk_…</code> in the shell that launches it. If that variable isn&apos;t visible
+                to the Codex process it still reports the server as authenticated, but sends no header and every call
+                fails — so export it before starting Codex, not after.
+              </p>
+
               <h4 className="rail-h">2 · Project IDs</h4>
               <p className="empty" style={{ marginBottom: 8 }}>
                 Agent tools and the <code>/vault</code> skill take a <code>projectId</code>. Copy one:

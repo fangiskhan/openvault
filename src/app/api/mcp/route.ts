@@ -170,6 +170,21 @@ export async function POST(req: Request) {
 }
 
 // Friendly hint for clients that probe with GET.
+// Streamable HTTP reserves GET for the OPTIONAL server-to-client SSE stream.
+// This server has no such stream — every response is the reply to a POST — and
+// the spec says a server that does not offer one MUST answer 405. Returning a
+// friendly 200 JSON descriptor here (which is what this used to do) tells a
+// strict client "stream opened", then hands it application/json instead of
+// text/event-stream, which reads as a broken stream rather than an absent one.
+// The descriptor is kept in the body: useful to a human with curl, ignored by
+// a client that only checks the status.
 export function GET() {
-  return Response.json({ name: "openvault-mcp", transport: "streamable-http", hint: "POST JSON-RPC 2.0 here" });
+  return Response.json(
+    {
+      name: "openvault-mcp",
+      transport: "streamable-http",
+      hint: "POST JSON-RPC 2.0 here. There is no GET event stream.",
+    },
+    { status: 405, headers: { Allow: "POST" } },
+  );
 }

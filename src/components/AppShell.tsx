@@ -94,6 +94,11 @@ export default function AppShell() {
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [showGraph, setShowGraph] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Minted on demand for the connect panel. Never persisted anywhere in the UI:
+  // the server stores only a hash, so this plaintext exists for this render and
+  // nowhere else.
+  const [agentToken, setAgentToken] = useState<string | null>(null);
+  const [minting, setMinting] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const [showAccounts, setShowAccounts] = useState(false);
   const [view, setView] = useState<"notes" | "status" | "code">("notes");
@@ -403,6 +408,18 @@ export default function AppShell() {
       notify("Couldn't delete the project.");
     }
   }, [activeProjectId, detail, loadProjects, selectProject, notify]);
+
+  const mintToken = useCallback(async () => {
+    setMinting(true);
+    try {
+      const r = await api("/api/auth/token", { method: "POST" });
+      setAgentToken(r.token);
+    } catch {
+      notify("Couldn't generate a token — sign in as an approved account first.");
+    } finally {
+      setMinting(false);
+    }
+  }, [notify]);
 
   const deleteItem = useCallback(async () => {
     if (!item) return;
@@ -1064,12 +1081,39 @@ export default function AppShell() {
               </p>
 
               <h4 className="rail-h">1 · Add the MCP server</h4>
+              {/* The token is part of the COMMAND, not a footnote under it. The
+                  previous version printed the command without --header and
+                  described the flag in prose below, so the obvious action —
+                  copy, paste, run — produced a server that 401s on every call
+                  and gave no hint why. Placeholder or real token, the shape you
+                  copy is always the shape that works. */}
+              <div style={{ marginBottom: 10 }}>
+                <button className="btn btn-accent" onClick={mintToken} disabled={minting}>
+                  {minting ? "Generating…" : agentToken ? "Generate a new token" : "Generate my token"}
+                </button>
+                <span className="empty" style={{ marginLeft: 10 }}>
+                  {agentToken
+                    ? "Shown once — copy a command below now."
+                    : "Fills the commands below with a real token."}
+                </span>
+              </div>
+              {agentToken && (
+                <p className="empty" style={{ margin: "0 0 12px", color: "var(--magenta)" }}>
+                  This replaced your previous token — anything still using the old one has stopped working.
+                </p>
+              )}
               {(() => {
                 const url = (origin || "http://localhost:6900") + "/api/mcp";
-                const cmd = `claude mcp add openvault ${url} --transport http --scope user`;
+                const tok = agentToken ?? "ovk_…";
+                const cmd = `claude mcp add openvault ${url} --transport http --scope user --header "Authorization: Bearer ${tok}"`;
                 return (
                   <div className="copyrow">
-                    <code className="codeblock">{cmd}</code>
+                    {/* Wraps: with the header inline this line is far past the
+                        panel width, and a command clipped at `--header "Aut`
+                        hides the part that was just made visible. */}
+                    <code className="codeblock" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {cmd}
+                    </code>
                     <button className="btn" onClick={() => copy(cmd, "cmd")}>
                       {copied === "cmd" ? "Copied" : "Copy"}
                     </button>
@@ -1077,20 +1121,24 @@ export default function AppShell() {
                 );
               })()}
               <p className="empty" style={{ margin: "6px 0 14px" }}>
-                In production, add your account token:{" "}
-                <code>--header &quot;Authorization: Bearer ovk_…&quot;</code> — create one under <strong>Accounts</strong>.
+                Running locally with no password? The header is ignored, so this works as-is.
               </p>
 
               <h4 className="rail-h">Codex</h4>
               {(() => {
                 const url = (origin || "http://localhost:6900") + "/api/mcp";
-                // Codex takes the NAME of an env var, not the token itself, so
-                // the two lines have to travel together — the command alone
-                // authenticates as nobody.
-                const cmd = `codex mcp add openvault --url ${url} --bearer-token-env-var OPENVAULT_TOKEN`;
+                const tok = agentToken ?? "ovk_…";
+                // Codex takes the NAME of an env var, not the token, so the
+                // export and the add have to travel together as one block —
+                // the add on its own authenticates as nobody.
+                const cmd =
+                  `export OPENVAULT_TOKEN=${tok}\n` +
+                  `codex mcp add openvault --url ${url} --bearer-token-env-var OPENVAULT_TOKEN`;
                 return (
                   <div className="copyrow">
-                    <code className="codeblock">{cmd}</code>
+                    <code className="codeblock" style={{ whiteSpace: "pre-wrap" }}>
+                      {cmd}
+                    </code>
                     <button className="btn" onClick={() => copy(cmd, "codex")}>
                       {copied === "codex" ? "Copied" : "Copy"}
                     </button>

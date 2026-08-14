@@ -1,0 +1,36 @@
+name: check
+
+# Until this existed, every quality property in this repo was upheld by one
+# person choosing to run the commands — so a PR that broke all 168 tests was
+# exactly as green as one that broke nothing, and `npm run lint` sat red on
+# main for two errors nobody had caused.
+#
+# Deliberately depends on nothing. Verified on a clean clone with no .env and
+# no database: `npm ci` builds the Prisma client via its postinstall, and the
+# suite is standalone — no Postgres, no Docker, no network, no secrets. The
+# whole job is seconds, which is the point: a slow gate gets skipped.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Pinned to match openvault-sync.yml. The repo has no engines field
+          # and the README says "Node 20+", so this file is the tiebreak.
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Ordered cheapest-first so the fastest signal fails first.
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests
+        run: npm test

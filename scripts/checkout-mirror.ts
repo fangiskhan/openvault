@@ -30,7 +30,10 @@ const VAULT = vaultArg.replace(/\/+$/, "");
 // and it lands in the Authorization header as an unencodable character.
 const TOKEN = (process.env.OPENVAULT_TOKEN ?? "").replace(/^﻿/, "").trim();
 
-async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
+// T is asserted, not validated: these are this vault's own MCP tools, so each
+// caller declares the shape it expects and the guards below cover the fields
+// whose absence would silently corrupt a checkout.
+async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${VAULT}/api/mcp`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
@@ -47,12 +50,15 @@ async function call(name: string, args: Record<string, unknown>): Promise<Record
   if (json.error) throw new Error(`${name}: ${json.error.message ?? "JSON-RPC error"} — is this vault older than the working-copy flow?`);
   const text = json.result?.content?.[0]?.text ?? "{}";
   if (json.result?.isError) throw new Error(`${name}: ${text.slice(0, 300)}`);
-  return JSON.parse(text);
+  return JSON.parse(text) as T;
 }
 
+type Project = { id: string; name: string };
+type CodeMapFile = { path: string; hash: string };
+
 async function main() {
-  const projects = await call("list_projects", {});
-  const list: Array<{ id: string; name: string }> = projects.projects ?? projects;
+  const projects = await call<{ projects?: Project[] } | Project[]>("list_projects", {});
+  const list: Project[] = Array.isArray(projects) ? projects : (projects.projects ?? []);
   const project = list.find((p) => p.id === projectArg) ?? list.find((p) => p.name?.toLowerCase() === projectArg.toLowerCase());
   if (!project) {
     console.error(`no project '${projectArg}' — available: ${list.map((p) => p.name).join(", ")}`);
@@ -67,7 +73,7 @@ async function main() {
     process.exit(1);
   }
 
-  const map = await call("get_code_map", { projectId: project.id });
+  const map = await call<{ files?: CodeMapFile[]; warning?: string; mirrorRef?: string | null; consistent?: boolean }>("get_code_map", { projectId: project.id });
   if (!map.files?.length) {
     console.error("the mirror is empty — nothing to check out");
     process.exit(1);
@@ -101,7 +107,7 @@ async function main() {
     let content = "";
     let offset = 0;
     for (;;) {
-      const r = await call("read_code", { projectId: project.id, path: f.path, offset, maxChars: 200_000 });
+      const r = await call<{ content?: string; truncated?: boolean; nextOffset?: number }>("read_code", { projectId: project.id, path: f.path, offset, maxChars: 200_000 });
       if (typeof r.content !== "string") throw new Error(`read_code returned no content for '${f.path}'`);
       content += r.content;
       if (!r.truncated) break;

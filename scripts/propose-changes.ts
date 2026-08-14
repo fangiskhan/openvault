@@ -65,7 +65,9 @@ function loadManifest(root: string): Manifest {
 const meta = loadManifest(dir);
 const TOKEN = (process.env.OPENVAULT_TOKEN ?? "").replace(/^﻿/, "").trim();
 
-async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
+// T is asserted, not validated: these are this vault's own MCP tools, so each
+// caller declares the shape it expects rather than trusting an untyped bag.
+async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${meta.vault}/api/mcp`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
@@ -82,8 +84,11 @@ async function call(name: string, args: Record<string, unknown>): Promise<Record
   if (json.error) throw new Error(json.error.message ?? "JSON-RPC error");
   const text = json.result?.content?.[0]?.text ?? "{}";
   if (json.result?.isError) throw new Error(text.slice(0, 300));
-  return JSON.parse(text);
+  return JSON.parse(text) as T;
 }
+
+type OpenSuggestion = { path: string; suggestionId: string };
+type FiledSuggestion = { suggestionId?: string; warning?: string };
 
 const norm = (s: string) => s.replace(/\r\n/g, "\n");
 
@@ -104,7 +109,7 @@ let filed = 0;
 // and the message tells the author how to supersede it.
 const open = new Map<string, string>();
 try {
-  const existing = await call("list_suggestions", { projectId: meta.projectId, status: "open" });
+  const existing = await call<{ suggestions?: OpenSuggestion[] }>("list_suggestions", { projectId: meta.projectId, status: "open" });
   for (const s of existing.suggestions ?? []) if (!open.has(s.path)) open.set(s.path, s.suggestionId);
 } catch {
   /* older vault without list_suggestions — proceed without dedup */
@@ -126,7 +131,7 @@ for (const path of [...new Set([...working, ...basePaths])].sort()) {
         results.push({ path, outcome: "would propose DELETING this file" });
         continue;
       }
-      const r = await call("suggest_change", {
+      const r = await call<FiledSuggestion>("suggest_change", {
         projectId: meta.projectId,
         path,
         deleteFile: true,
@@ -170,7 +175,7 @@ for (const path of [...new Set([...working, ...basePaths])].sort()) {
         results.push({ path, outcome: parts.length > 1 ? `would propose as a NEW file in ${parts.length} parts` : "would propose as a NEW file" });
         continue;
       }
-      const r = await call("suggest_change", {
+      const r = await call<FiledSuggestion>("suggest_change", {
         projectId: meta.projectId,
         path,
         edits: parts.map((p) => ({ before: "", after: p })),
@@ -197,7 +202,7 @@ for (const path of [...new Set([...working, ...basePaths])].sort()) {
       results.push({ path, outcome: `would propose ${plan.edits.length} edit(s)` });
       continue;
     }
-    const r = await call("suggest_change", {
+    const r = await call<FiledSuggestion>("suggest_change", {
       projectId: meta.projectId,
       path,
       edits: plan.edits,

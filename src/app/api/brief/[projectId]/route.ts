@@ -17,9 +17,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
     return new Response("unauthorized", { status: 401 });
   }
 
-  const { projectId } = await params;
-  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true } });
+  const { projectId: key } = await params;
+  // Accept a SLUG as well as an id. A .claude/settings.json committed to a repo
+  // has to work in someone else's clone, where the cuid differs but the slug is
+  // the same; both columns are @unique, so the fallback cannot be ambiguous.
+  const project =
+    (await prisma.project.findUnique({ where: { id: key }, select: { id: true, name: true } })) ??
+    (await prisma.project.findUnique({ where: { slug: key }, select: { id: true, name: true } }));
   if (!project) return new Response("unknown project", { status: 404 });
+  const projectId = project.id;
 
   const scope = new URL(req.url).searchParams.get("scope") ?? "connected";
   const [b, work, skills, suggestions] = await Promise.all([

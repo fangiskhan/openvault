@@ -25,7 +25,17 @@ jobs:
           # and the README says "Node 20+", so this file is the tiebreak.
           node-version: 22
           cache: npm
-      - run: npm ci
+      # npm install, NOT npm ci — deliberate, do not "fix" this back.
+      # package-lock.json is authored on Windows, where npm prunes the
+      # Linux-only transitive optionals of @img/sharp-wasm32 (@emnapi/core,
+      # @emnapi/runtime). npm ci then refuses on ubuntu with "Missing:
+      # @emnapi/runtime from lock file". Regenerating the lock on Windows does
+      # not add them (tried: --package-lock-only, --os=linux --cpu=x64, and a
+      # full delete-and-rebuild, which instead dropped 6 packages and
+      # downgraded one). npm install resolves per-platform and honours the
+      # lock everywhere it can. Switch back to npm ci once the lock is
+      # regenerated on Linux.
+      - run: npm install
 
       # Ordered cheapest-first so the fastest signal fails first.
       - name: Typecheck

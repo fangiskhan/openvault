@@ -11,6 +11,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/openvault-nudge.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

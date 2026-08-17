@@ -1196,6 +1196,9 @@ export default function AppShell() {
                   <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=activity-script`} title="Save as .claude/openvault-activity.mjs — the PostToolUse hook above runs this">
                     Activity
                   </a>
+                  <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=nudge-script`} title="Save as .claude/openvault-nudge.mjs — the Stop hook runs it; periodically asks the agent whether anything is worth recording, and stays silent if it already wrote back">
+                    Checkpoint
+                  </a>
                   <a className="btn" href={`/api/connect-kit?projectId=${p.id}&file=commit-hook`} title="Save as .git/hooks/post-commit — every commit auto-syncs its files to the code mirror">
                     Git hook
                   </a>
@@ -1207,7 +1210,10 @@ export default function AppShell() {
                 <code>.claude/openvault-brief.mjs</code> (fetches this briefing at session start; set{" "}
                 <code>OPENVAULT_TOKEN</code> when the vault requires auth) · <code>Activity</code> → save as{" "}
                 <code>.claude/openvault-activity.mjs</code> (the PostToolUse hook runs it; records which files a session
-                touched, never their contents) · <code>Git hook</code> → save as <code>.git/hooks/post-commit</code>{" "}
+                touched, never their contents) · <code>Checkpoint</code> → save as{" "}
+                <code>.claude/openvault-nudge.mjs</code> (a Stop hook that periodically asks whether anything is
+                worth recording, and says nothing if the session already wrote back) · <code>Git hook</code> → save as{" "}
+                <code>.git/hooks/post-commit</code>{" "}
                 (each commit auto-syncs its changed files to the code mirror).
               </p>
               <div className="copyrow" style={{ marginTop: 10 }}>

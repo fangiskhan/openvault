@@ -16,6 +16,15 @@ import { buildCorpus, cosine, sharedTerms, detectCommunities } from "../related"
 import { IMAGE_EXT, extractFile } from "../extract";
 import { readBlob, saveBlob, safeStorageName, storageDriver } from "../storage";
 
+// search_code limits. The mirror is a text-only copy of one repo (2.7 MB for
+// this project at the time of writing), so a full scan is cheap — but the
+// budget is explicit so a large mirror degrades loudly rather than silently.
+const CODE_SEARCH_LIMIT = 50;
+const CODE_SEARCH_LIMIT_MAX = 200;
+const CODE_SEARCH_MAX_BYTES = 32 * 1024 * 1024;
+const CODE_SEARCH_LINE_CHARS = 300;
+
+
 // An inlined image is base64 in the agent's context window; past this the cost
 // outweighs the answer, so read_file hands back a download path instead.
 const MAX_INLINE_IMAGE_BYTES = 1_500_000;
@@ -1212,6 +1221,114 @@ export const tools: Tool[] = [
         ref: file.ref,
         syncedBy: file.syncedBy,
         updatedAt: file.updatedAt,
+      };
+    },
+  },
+  {
+    name: "search_code",
+    description:
+      "Grep the project's mirrored source for a literal string, the way you would grep a checkout. Returns path, line number and the matching line, so you can go straight to read_code instead of guessing a filename from get_code_map. Case-insensitive by default. Narrow with pathPrefix ('src/lib/') when you already know the area. NOTE this searches the MIRROR, which is only as current as the last sync_code — get_code_map shows when each file was pushed. Notes and documents are NOT searched here; use search for those.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" },
+        query: { type: "string", description: "literal text to find (not a regex)" },
+        pathPrefix: { type: "string", description: "only search paths starting with this, e.g. 'src/lib/'" },
+        caseSensitive: { type: "boolean", description: "default false" },
+        limit: { type: "number", description: `max matches to return (default ${CODE_SEARCH_LIMIT}, max ${CODE_SEARCH_LIMIT_MAX})` },
+      },
+      required: ["projectId", "query"],
+    },
+    handler: async (a) => {
+      const { projectId, query, pathPrefix, caseSensitive, limit } = a as {
+        projectId: string;
+        query: string;
+        pathPrefix?: string;
+        caseSensitive?: boolean;
+        limit?: number;
+      };
+      const needle = String(query ?? "");
+      if (!needle.trim()) throw new Error("query is required");
+      const cap = Math.min(Math.max(1, Math.floor(Number(limit) || CODE_SEARCH_LIMIT)), CODE_SEARCH_LIMIT_MAX);
+
+      // Matching happens in JS, not in the database, and that is deliberate:
+      // Prisma's SQLite connector REJECTS mode:"insensitive" (verified), while
+      // Postgres LIKE is case-sensitive without it — so a DB-side prefilter
+      // would quietly return different results on the two providers this
+      // project ships. The mirror is small by construction (a text-only copy of
+      // one repo), so scanning it is affordable; the byte budget below keeps a
+      // pathological mirror from taking the process down with it.
+      const rows = await prisma.codeFile.findMany({
+        where: {
+          projectId,
+          ...(pathPrefix ? { path: { startsWith: normalizeRepoPath(pathPrefix) } } : {}),
+        },
+        orderBy: [{ path: "asc" }, { part: "asc" }],
+        select: { path: true, content: true },
+      });
+      if (!rows.length) {
+        return {
+          matches: [],
+          filesMatched: 0,
+          totalMatches: 0,
+          truncated: false,
+          note: pathPrefix
+            ? `no mirrored files under '${pathPrefix}' (see get_code_map)`
+            : "this project's code mirror is empty (an agent must sync_code first)",
+        };
+      }
+
+      // Rejoin chunked files: a file over the per-chunk cap spans several rows,
+      // and a match on a chunk boundary would be invisible to a per-row scan.
+      const byPath = new Map<string, string>();
+      for (const r of rows) byPath.set(r.path, (byPath.get(r.path) ?? "") + r.content);
+
+      const hay = (t: string) => (caseSensitive ? t : t.toLowerCase());
+      const target = hay(needle);
+
+      const matches: Array<{ path: string; line: number; text: string }> = [];
+      let totalMatches = 0;
+      let filesMatched = 0;
+      let scannedBytes = 0;
+      let skippedFiles = 0;
+
+      for (const [path, content] of byPath) {
+        if (scannedBytes >= CODE_SEARCH_MAX_BYTES) {
+          skippedFiles++;
+          continue;
+        }
+        scannedBytes += content.length;
+        if (!hay(content).includes(target)) continue;
+        filesMatched++;
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (!hay(lines[i]).includes(target)) continue;
+          totalMatches++;
+          if (matches.length < cap) {
+            const text = lines[i].trim();
+            matches.push({
+              path,
+              line: i + 1,
+              text: text.length > CODE_SEARCH_LINE_CHARS ? text.slice(0, CODE_SEARCH_LINE_CHARS) + "…" : text,
+            });
+          }
+        }
+      }
+
+      const truncated = totalMatches > matches.length;
+      return {
+        matches,
+        filesMatched,
+        totalMatches,
+        truncated,
+        // Never cap silently: a caller that does not know results were dropped
+        // reads a partial answer as a complete one.
+        ...(truncated ? { hint: `showing ${matches.length} of ${totalMatches} matches; raise limit or narrow with pathPrefix` } : {}),
+        ...(skippedFiles
+          ? {
+              warning: `scan stopped at ${CODE_SEARCH_MAX_BYTES} bytes; ${skippedFiles} file(s) were NOT searched. Narrow with pathPrefix.`,
+            }
+          : {}),
       };
     },
   },

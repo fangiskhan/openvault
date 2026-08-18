@@ -12,7 +12,7 @@ A live instance runs at [openvault-hub.vercel.app](https://openvault-hub.vercel.
 
 Notes, tasks, risks, meeting minutes and spreadsheets live inside projects. Connect two projects and wikilinks, search and the graph cross the boundary. Each project also carries a code mirror and a work board, so agents read current code and see each other's in-flight changes without pulling GitHub. Run it on your own machine, your own server, or Vercel. Your data stays where you put it.
 
-Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 47 MCP tools for reading and writing state, code, and coordination. 168 automated tests cover the rules engine, the similarity engine, the code mirror's concurrency and recoverability, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
+Working v1: projects, status, cited briefings, multi-user accounts with roles and approval, tokens hashed at rest, an append-only audit trail, JSON export, and 48 MCP tools for reading and writing state, code, and coordination. 178 automated tests cover the rules engine, the similarity engine, the code mirror's concurrency and recoverability, and the auth/review safety core. Jira/Slack/Notion adapters, draft workspaces, and realtime push remain on the [roadmap](#roadmap).
 
 ## What it looks like
 
@@ -48,7 +48,7 @@ The whole vault as an arc diagram. Notes run left to right grouped by project, s
 - **Document and image upload, extracted into searchable text.** PDF, DOCX, PPTX, XLSX/CSV, TXT/MD and images (PNG, JPEG, WebP, GIF). The extracted text becomes the item body, so search finds a phrase inside a slide deck rather than only its filename. Dependency-free: Office files are ZIP archives of XML and PDF text lives in compressed content streams, both of which Node's `zlib` already opens. PDFs decode through their `/ToUnicode` tables where those resolve; where they do not, the upload **says so** instead of storing glyph indices that merely look like text — one real PDF produced `"! ,0++.-*(&*)`, and putting that into search results would be worse than storing nothing. Scanned PDFs are reported as needing OCR. `list_files` and `read_file` give agents access, and `read_file` returns an **image as an image**, so an agent can look at a screenshot rather than be told about one.
 - A rules engine that flags overdue, blocked, open-risk, due-soon and stale items, cites each one to its source item, and rolls them into a per-project RAG status
 - A one-screen briefing built from real items; each line links to its source
-- 47 MCP tools (table below)
+- 48 MCP tools (table below)
 - An interactive [3D pipeline page](https://openvault-hub.vercel.app/pipeline) at `/pipeline` — the loop as three swim lanes with the unit of work travelling through it. three.js is imported only by that route, so the vault itself never pays for it.
 
 ![The 3D pipeline page: three swim lanes — your agent, the vault, their agent — with the eight steps of the loop and a marker travelling between them](docs/screenshots/05-pipeline.png)
@@ -84,7 +84,7 @@ Drop the `--header` for open local use with no `MCP_TOKEN` set.
 | Read | `list_projects` · `get_status` · `get_attention` · `get_briefing` · `get_recent_activity` · `search` · `read_item` · `get_inbox` |
 | Knowledge graph | `get_graph` · `get_links` · `find_path` · `suggest_links` · `find_project_bridges` |
 | Write (attributed) | `set_status` · `append_update` · `flag_issue` · `request_info` · `import_notes` (bulk: atomic notes + Map-of-Content + auto cross-links in one call) |
-| Code and coordination | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` |
+| Code and coordination | `announce_work` · `get_active_work` · `update_work` · `review_work` · `sync_code` · `get_code_map` · `read_code` · `search_code` |
 | Project skills | `list_skills` · `get_skill` · `set_skill` · `delete_skill` |
 | Identity and admin | `whoami` · `list_pending_accounts` · `approve_account` · `appoint_executive` · `register_mcp` · `find_mcp` |
 
@@ -106,7 +106,7 @@ With the vault:
 2. `get_active_work` shows who is working on what across the project, including the review queue.
 3. After editing, the agent calls `sync_code` with the changed files (it diffs against `get_code_map` hashes first) and sets its intent to `in_review`.
 4. An owner or executive reads the synced files and calls `review_work`. Approval marks the work done and clears the actor to push to git. Request-changes sends it back with a note. A member cannot mark their own work done; the server rejects the attempt.
-5. Any agent reads current code through `get_code_map` and `read_code` without a git pull.
+5. Any agent reads current code through `get_code_map`, `search_code` and `read_code` without a git pull.
 
 Each write carries the account or declared actor and lands in the audit log. Paths are validated against traversal; files larger than 200k characters are chunked and rejoined on read, 100 files per sync. The vault holds the merge decision and its provenance. Git performs the merge, and the server never holds your GitHub credentials.
 
@@ -178,7 +178,7 @@ The briefing costs zero LLM tokens to produce (templated rules) and the inferred
 
 Fine print, because a table of numbers invites more trust than it has earned:
 
-- Connecting the MCP server loads 47 tool schemas into every session — a measured 7,366 tokens of overhead, paid whether or not a tool is called. Two avoided file-reads repay it.
+- Connecting the MCP server loads 48 tool schemas into every session — a measured 7,615 tokens of overhead, paid whether or not a tool is called. Two avoided file-reads repay it.
 - **The code-map ratio is not a general discount, and it is the row most likely to be misread.** `get_code_map` returns paths, hashes and sizes — *no source*. It makes **detecting** change cheap; it does not compress code. A task that genuinely requires reading 250k tokens of source still costs 250k. Measured on this repo: 66 of its 117 files changed in the last seven days, and reading those is 249,660 tokens against 268,326 for everything — so on "what changed this week", the map's saving on the *reading* is close to nothing. Its saving is on the *search*: 8,066 tokens tells you exactly which files differ, by hash, with no false positives.
 - The ratio is also a function of average file size rather than a constant — it was 14x when the mirror held 89 smaller files. A repo of many tiny files would score worse.
 - **The savings that actually compound are the notes, not the mirror.** A 438-token briefing answers "where is this project" without re-deriving it, and one `search` plus its cited note (2,683 tokens) answers "why did we decide X" without re-reading the history that produced it. That is compression of *conclusions*, deliberately lossy, and it is where the leverage is.

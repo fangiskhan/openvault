@@ -227,7 +227,7 @@ Self-registration works too (`POST /api/accounts`); accounts start pending and w
 
 ## Quick start (local)
 
-Requires Node 20+.
+Requires Node 22+.
 
 ```bash
 git clone https://github.com/fangiskhan/openvault openvault

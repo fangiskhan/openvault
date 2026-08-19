@@ -18,11 +18,14 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Pinned to an immutable commit, not a moving tag: v4 is a branch that
+      # GitHub repoints, so "it passed CI" means nothing about which code ran.
+      # Comments carry the human-readable version; dependabot bumps both.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # Pinned to match openvault-sync.yml. The repo has no engines field
-          # and the README says "Node 20+", so this file is the tiebreak.
+          # Matches package.json engines and .nvmrc. Kept literal rather than
+          # read from .nvmrc so a broken node-version file fails loudly here.
           node-version: 22
           cache: npm
       # npm install, NOT npm ci — deliberate, do not "fix" this back.
@@ -37,10 +40,9 @@ jobs:
       # regenerated on Linux.
       - run: npm install
 
-      # Ordered cheapest-first so the fastest signal fails first.
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Lint
-        run: npm run lint
-      - name: Tests
-        run: npm test
+      # Exactly what the pre-push hook runs. One command, one definition, so
+      # a green push and a green CI run can never mean different things.
+      # (Ordered cheapest-first inside the script: typecheck ~2s, lint ~4s,
+      # tests ~3s, so the fastest signal fails first.)
+      - name: Check
+        run: npm run check

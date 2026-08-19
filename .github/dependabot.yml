@@ -1,0 +1,23 @@
+# Pinning actions to a SHA trades a moving target for a frozen one, so
+# something has to move them forward on purpose. That is this file's whole job.
+# npm is here because the history shows the manual pattern failing: alerts were
+# on, and clearing them was a hand-swept commit ("Clear all 19 Dependabot
+# alerts") plus hand-forced overrides.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine noise, individual PRs for anything that can
+      # actually break a build.
+      minor-and-patch:
+        update-types: [minor, patch]

@@ -6,6 +6,7 @@
     "dev": "next dev -p 6900",
     "build": "next build",
     "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run lint && npm test",
     "start": "next start -p 6900",
     "lint": "eslint",
     "postinstall": "prisma generate",
@@ -16,7 +17,8 @@
     "pg:schema": "node scripts/make-postgres-schema.mjs",
     "pg:push": "node scripts/make-postgres-schema.mjs && prisma db push --schema prisma/schema.postgres.prisma",
     "vercel-build": "node scripts/make-postgres-schema.mjs && node scripts/pg-push.mjs && prisma generate --schema prisma/schema.postgres.prisma && next build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "simple-git-hooks || true"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -39,6 +41,7 @@
     "eslint": "^9",
     "eslint-config-next": "^16.3.0",
     "prisma": "^6.19.3",
+    "simple-git-hooks": "^2.13.1",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
     "typescript": "^5",
@@ -47,5 +50,11 @@
   "overrides": {
     "postcss": "^8.5.10",
     "uuid": "^11.1.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "simple-git-hooks": {
+    "pre-push": "npm run check"
   }
 }

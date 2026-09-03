@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 6900",
+    "sync": "tsx scripts/sync-repo.ts . OpenVault http://localhost:6900",
     "build": "next build",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm test",

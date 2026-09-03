@@ -185,6 +185,9 @@ async function main() {
     }
     console.error("   read_code those paths, merge into your working copy, commit, then re-run.");
   }
+  // The manifest is the COMPLETE path list of the commit, so capture it before
+  // `files` is narrowed to just the ones being sent.
+  const allPaths = files.map((f) => f.path);
   files.length = 0;
   files.push(...toSend);
   if (!files.length) {
@@ -232,6 +235,36 @@ async function main() {
   }
   const totalKb = Math.round(files.reduce((s, f) => s + f.content.length, 0) / 1024);
   console.log(`${projectName}: synced ${synced}/${files.length} files (${totalKb} KB)${ref ? ` @ ${ref}` : ""}`);
+
+  // Stamp the ref across the whole commit, not just the files that changed.
+  //
+  // Skipping unchanged files saves real bandwidth, but it left them carrying
+  // the ref of whenever they last changed. get_code_map judges consistency by
+  // counting distinct refs, so a clean sync where every file was byte-identical
+  // to HEAD still reported `consistent: false` and warned agents the tree "may
+  // be versions that never coexisted". A staleness warning that fires when
+  // nothing is stale is worse than none: it trains everyone to ignore the
+  // warning on a project where the drift is real.
+  //
+  // The server already handles this — a manifest stamps the ref on every path
+  // in it and prunes anything absent. The script simply never sent one.
+  //
+  // Not sent when files were protected: those paths hold mirror content that is
+  // not in git, so the mirror genuinely is not equal to one commit and saying
+  // otherwise would be the same lie in the opposite direction.
+  if (!conflicted.length && !protectedPaths.length) {
+    const m = (await rpc("sync_code", {
+      projectId: project.id,
+      ref,
+      files: [],
+      manifest: allPaths,
+      actor: "sync-repo",
+    })) as { pruned?: string[] };
+    const pruned = m.pruned?.length ?? 0;
+    console.log(`  manifest: ${allPaths.length} paths stamped @ ${ref}${pruned ? `, ${pruned} pruned` : ""}`);
+  } else {
+    console.log("  manifest NOT sent — mirror still spans refs (see the warnings above)");
+  }
 
   if (conflicted.length) {
     // Loud and non-zero: a silent "success" here is what let a day's work be

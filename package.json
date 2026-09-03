@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "next dev -p 6900",
     "sync": "tsx scripts/sync-repo.ts . OpenVault http://localhost:6900",
+    "sync:install": "node scripts/sync-hook.mjs install",
+    "sync:uninstall": "node scripts/sync-hook.mjs uninstall",
+    "sync:status": "node scripts/sync-hook.mjs status",
     "build": "next build",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm test",

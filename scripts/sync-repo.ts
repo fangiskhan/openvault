@@ -72,11 +72,21 @@ async function main() {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (process.env.OPENVAULT_TOKEN) headers.authorization = `Bearer ${process.env.OPENVAULT_TOKEN}`;
   const rpc = async (name: string, args: unknown) => {
-    const res = await fetch(`${VAULT}/api/mcp`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
-    });
+    // An unreachable vault is the NORMAL case when this runs from a commit
+    // hook: most of the time the server is simply not started. Say so in one
+    // line and exit clean, instead of letting a raw fetch error object land in
+    // the hook log where it reads like the commit went wrong.
+    let res: Response;
+    try {
+      res = await fetch(`${VAULT}/api/mcp`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+      });
+    } catch {
+      console.log(`vault not reachable at ${VAULT} — skipping sync (nothing was changed)`);
+      process.exit(0);
+    }
     const out = (await res.json()) as { result?: { content?: Array<{ text: string }>; isError?: boolean } };
     const text = out.result?.content?.[0]?.text ?? "{}";
     if (out.result?.isError) throw new Error(text);

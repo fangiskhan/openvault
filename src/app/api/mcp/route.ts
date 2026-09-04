@@ -3,6 +3,7 @@ import { tools, toolMap, type ToolCtx } from "@/lib/mcp/tools";
 import { secretsRequired, isDemoMode } from "@/lib/security";
 import { resolveByToken, getOrCreateOwner } from "@/lib/accounts";
 import { rateLimit, clientKey } from "@/lib/ratelimit";
+import { negotiateProtocol } from "@/lib/mcp/protocol";
 
 // Constant-time string compare so the shared-token check can't be probed byte
 // by byte via response timing. Bails on length mismatch (that much is public).
@@ -15,8 +16,6 @@ function safeEqual(a: string, b: string): boolean {
 // Minimal MCP server over JSON-RPC 2.0 (Streamable HTTP, single-response mode).
 // Any MCP client — Claude Code, Cursor, Codex — connects here to read and write
 // shared project state, so agents stay coordinated without a human handover.
-
-const PROTOCOL_VERSION = "2025-06-18";
 
 // Resolve the caller's identity from the bearer token:
 //  - the shared MCP_TOKEN (legacy/bootstrap key) → the root owner account
@@ -99,7 +98,7 @@ export async function POST(req: Request) {
   switch (method) {
     case "initialize":
       return result(id, {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: negotiateProtocol((params as { protocolVersion?: unknown } | undefined)?.protocolVersion),
         capabilities: { tools: {} },
         serverInfo: { name: "openvault", version: "0.1.0" },
         instructions:

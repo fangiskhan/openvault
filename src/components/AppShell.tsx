@@ -639,7 +639,7 @@ export default function AppShell() {
         <button className="btn" onClick={() => setShowAccounts(true)}>
           Accounts
         </button>
-        <button className="btn" onClick={() => setShowConnectAgent(true)} title="Connect Claude Code / Cursor / Codex">
+        <button className="btn" onClick={() => setShowConnectAgent(true)} title="Connect Claude Code / Cursor / Codex / Hermes">
           Connect agent
         </button>
         <button className="btn btn-accent" onClick={newNote} disabled={!activeProjectId}>
@@ -1076,7 +1076,7 @@ export default function AppShell() {
             </div>
             <div className="modal-body">
               <p className="empty" style={{ marginBottom: 12 }}>
-                Point Claude Code, Cursor, Codex, or any MCP client at this vault. It reads and writes shared project
+                Point Claude Code, Cursor, Codex, Hermes, or any MCP client at this vault. It reads and writes shared project
                 state so agents stay coordinated — no human handover.
               </p>
 
@@ -1150,6 +1150,33 @@ export default function AppShell() {
                 <code>OPENVAULT_TOKEN=ovk_…</code> in the shell that launches it. If that variable isn&apos;t visible
                 to the Codex process it still reports the server as authenticated, but sends no header and every call
                 fails — so export it before starting Codex, not after.
+              </p>
+
+              <h4 className="rail-h">Hermes</h4>
+              {(() => {
+                const url = (origin || "http://localhost:6900") + "/api/mcp";
+                // Hermes prompts for the token itself (masked) and writes it to
+                // $HERMES_HOME/.env as MCP_OPENVAULT_API_KEY, leaving config.yaml
+                // holding only "Bearer ${MCP_OPENVAULT_API_KEY}". So unlike the
+                // two blocks above, the token must NOT be inlined here -- pasting
+                // it into config.yaml is the thing Hermes deliberately avoids.
+                const cmd = `hermes mcp add openvault --url ${url} --auth header`;
+                return (
+                  <div className="copyrow">
+                    <code className="codeblock" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {cmd}
+                    </code>
+                    <button className="btn" onClick={() => copy(cmd, "hermes")}>
+                      {copied === "hermes" ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                );
+              })()}
+              <p className="empty" style={{ margin: "6px 0 14px" }}>
+                Answer <em>yes</em> to &ldquo;requires authentication&rdquo;, then paste the same{" "}
+                <code>ovk_…</code> token when it asks. Hermes stores it in{" "}
+                <code>$HERMES_HOME/.env</code> and keeps only a <code>{"${MCP_OPENVAULT_API_KEY}"}</code>{" "}
+                reference in <code>config.yaml</code>, so the secret never lands in a file you would commit.
               </p>
 
               <h4 className="rail-h">2 · Project IDs</h4>

@@ -25,7 +25,7 @@
     "prepare": "simple-git-hooks || true"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.3",
+    "@prisma/client": "^7.9.1",
     "@types/three": "^0.185.1",
     "@vercel/blob": "^2.4.0",
     "exceljs": "^4.4.0",

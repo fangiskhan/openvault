@@ -70,9 +70,15 @@ const SKIP_FILE = /package-lock\.json$/i;
 const tracked = execFileSync("git", ["ls-files"], { cwd: REPO, encoding: "utf8" })
   .split("\n")
   .filter(Boolean);
-const SELF = "scripts/benchmark-retrieval.mjs";
+//   * README.md, for the same reason one level up: it publishes this
+//     benchmark's questions, its answer terms AND its results, so grepping the
+//     corpus for "claude-mem" found the answer key rather than the source. An
+//     audit caught row 1 flipping from "code 1/3" to "code 3/3" purely because
+//     the table had been pasted into a file the corpus includes. Excluding the
+//     script but not the document that reprints it was half a guard.
+const SELF = new Set(["scripts/benchmark-retrieval.mjs", "README.md"]);
 const ALL = tracked
-  .filter((f) => !SKIP_EXT.test(f) && !SKIP_FILE.test(f) && f !== SELF)
+  .filter((f) => !SKIP_EXT.test(f) && !SKIP_FILE.test(f) && !SELF.has(f))
   .filter((f) => !f.split("/").some((seg) => SKIP.has(seg)))
   .map((f) => join(REPO, f));
 const sizeOf = (p) => (existsSync(p) ? statSync(p).size : 0);

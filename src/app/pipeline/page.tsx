@@ -20,7 +20,7 @@ export const metadata = {
 
 const LANES = [
   {
-    name: "YOUR AGENT",
+    name: "CONTRIBUTOR",
     colour: "var(--spx-lime)",
     body: "Reads the project's state and current source, says what it is about to touch, and proposes changes it cannot push itself.",
   },
@@ -30,7 +30,7 @@ const LANES = [
     body: "Holds decisions, status, the code mirror and the review queue. It never writes to git — that is what keeps it safe to share.",
   },
   {
-    name: "THEIR AGENT",
+    name: "OWNER",
     colour: "var(--spx-magenta)",
     body: "Meets the queue at session start, reviews what is waiting, applies what is approved in its own checkout, and pushes.",
   },

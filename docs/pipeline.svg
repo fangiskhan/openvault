@@ -1,94 +1,124 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2140 760" width="2140" height="760" role="img" aria-labelledby="t d">
-<title id="t">How work moves through OpenVault</title>
-<desc id="d">A swim-lane diagram in three rows. Your agent prompts, briefs itself, reads the code mirror, announces work and proposes a change. The vault holds the code mirror and the review queue. Their agent reviews the proposal, applies the approved change in its own checkout and pushes; CI mirrors it back. The vault never writes to git.</desc>
-<defs><style>
-    .ttl { font: 800 17px "Segoe UI", Inter, system-ui, sans-serif; letter-spacing: .6px; fill: #0a0a0a; }
-    .sub { font: 13px ui-monospace, "Cascadia Mono", Menlo, monospace; fill: #555; }
-    .lane{ font: 800 17px "Segoe UI", Inter, system-ui, sans-serif; letter-spacing: 2.4px; fill: #0a0a0a; }
-    .note{ font: 15px ui-monospace, "Cascadia Mono", Menlo, monospace; fill: #0a0a0a; }
-    .hdr { font: 800 34px "Segoe UI", Inter, system-ui, sans-serif; letter-spacing: 7px; fill: #0a0a0a; }
-    .wire{ fill: none; stroke: #0a0a0a; stroke-width: 3; }
-  </style></defs>
-<rect width="2140" height="760" fill="#f5f5f5"/>
-<g stroke="#e7e7e7" stroke-width="1"><path d="M0 0 H2140 M0 45 H2140 M0 90 H2140 M0 135 H2140 M0 180 H2140 M0 225 H2140 M0 270 H2140 M0 315 H2140 M0 360 H2140 M0 405 H2140 M0 450 H2140 M0 495 H2140 M0 540 H2140 M0 585 H2140 M0 630 H2140 M0 675 H2140 M0 720 H2140 M0 0 V760 M45 0 V760 M90 0 V760 M135 0 V760 M180 0 V760 M225 0 V760 M270 0 V760 M315 0 V760 M360 0 V760 M405 0 V760 M450 0 V760 M495 0 V760 M540 0 V760 M585 0 V760 M630 0 V760 M675 0 V760 M720 0 V760 M765 0 V760 M810 0 V760 M855 0 V760 M900 0 V760 M945 0 V760 M990 0 V760 M1035 0 V760 M1080 0 V760 M1125 0 V760 M1170 0 V760 M1215 0 V760 M1260 0 V760 M1305 0 V760 M1350 0 V760 M1395 0 V760 M1440 0 V760 M1485 0 V760 M1530 0 V760 M1575 0 V760 M1620 0 V760 M1665 0 V760 M1710 0 V760 M1755 0 V760 M1800 0 V760 M1845 0 V760 M1890 0 V760 M1935 0 V760 M1980 0 V760 M2025 0 V760 M2070 0 V760 M2115 0 V760"/></g>
-<text class="hdr" x="46" y="64" fill="#00e5ff">OPENVAULT</text>
-<text class="hdr" x="42" y="60" fill="#ff1a66">OPENVAULT</text>
-<text class="hdr" x="38" y="56">OPENVAULT</text>
-<text class="note" x="40" y="92">one prompt → reviewed code, and two agents on one project with no human relaying between them</text>
-<rect x="53" y="175" width="196" height="46" fill="#0a0a0a"/>
-<rect x="46" y="168" width="196" height="46" fill="#e5ff1a" stroke="#0a0a0a" stroke-width="3"/>
-<text class="lane" x="64" y="198">YOUR AGENT</text>
-<rect x="53" y="355" width="196" height="46" fill="#0a0a0a"/>
-<rect x="46" y="348" width="196" height="46" fill="#00e5ff" stroke="#0a0a0a" stroke-width="3"/>
-<text class="lane" x="64" y="378">THE VAULT</text>
-<rect x="53" y="535" width="196" height="46" fill="#0a0a0a"/>
-<rect x="46" y="528" width="196" height="46" fill="#ff1a66" stroke="#0a0a0a" stroke-width="3"/>
-<text class="lane" x="64" y="558">THEIR AGENT</text>
-<g class="wire"><path d="M472 232 H482 V412 H492 M676 412 H696 M880 412 H890 V232 H900 M1084 232 H1104 M1288 232 H1298 V412 H1308 M1492 412 H1502 V592 H1512 M1696 592 H1716 M1900 592 H1910 V412 H1920"/></g>
-<g>
-<rect x="295" y="197" width="184" height="84" fill="#0a0a0a"/>
-<rect x="288" y="190" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="288" y="190" width="184" height="9" fill="#e5ff1a"/>
-<text class="ttl" x="300" y="232" style="font-size:16px">YOU PROMPT</text>
-<text class="sub" x="300" y="256" style="font-size:13px">“add retries”</text>
-</g>
-<g>
-<rect x="499" y="377" width="184" height="84" fill="#0a0a0a"/>
-<rect x="492" y="370" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="492" y="370" width="184" height="9" fill="#00e5ff"/>
-<text class="ttl" x="504" y="412" style="font-size:16px">GET_BRIEFING</text>
-<text class="sub" x="504" y="436" style="font-size:13px">state + skills</text>
-</g>
-<g>
-<rect x="703" y="377" width="184" height="84" fill="#0a0a0a"/>
-<rect x="696" y="370" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="696" y="370" width="184" height="9" fill="#00e5ff"/>
-<text class="ttl" x="708" y="412" style="font-size:16px">READ_CODE</text>
-<text class="sub" x="708" y="436" style="font-size:13px">mirror @ 1 commit</text>
-</g>
-<g>
-<rect x="907" y="197" width="184" height="84" fill="#0a0a0a"/>
-<rect x="900" y="190" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="900" y="190" width="184" height="9" fill="#e5ff1a"/>
-<text class="ttl" x="912" y="232" style="font-size:16px">ANNOUNCE_WORK</text>
-<text class="sub" x="912" y="256" style="font-size:13px">warns on overlap</text>
-</g>
-<g>
-<rect x="1111" y="197" width="184" height="84" fill="#0a0a0a"/>
-<rect x="1104" y="190" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="1104" y="190" width="184" height="9" fill="#e5ff1a"/>
-<text class="ttl" x="1116" y="232" style="font-size:15px">SUGGEST_CHANGE</text>
-<text class="sub" x="1116" y="256" style="font-size:13px">anchored edits</text>
-</g>
-<g>
-<rect x="1315" y="377" width="184" height="84" fill="#0a0a0a"/>
-<rect x="1308" y="370" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="1308" y="370" width="184" height="9" fill="#00e5ff"/>
-<text class="ttl" x="1320" y="412" style="font-size:16px">REVIEW QUEUE</text>
-<text class="sub" x="1320" y="436" style="font-size:13px">unreviewed, in vault</text>
-</g>
-<g>
-<rect x="1519" y="557" width="184" height="84" fill="#0a0a0a"/>
-<rect x="1512" y="550" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="1512" y="550" width="184" height="9" fill="#ff1a66"/>
-<text class="ttl" x="1524" y="592" style="font-size:13px">REVIEW_SUGGESTION</text>
-<text class="sub" x="1524" y="616" style="font-size:13px">approve or reject</text>
-</g>
-<g>
-<rect x="1723" y="557" width="184" height="84" fill="#0a0a0a"/>
-<rect x="1716" y="550" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="1716" y="550" width="184" height="9" fill="#ff1a66"/>
-<text class="ttl" x="1728" y="592" style="font-size:16px">OWNER APPLIES</text>
-<text class="sub" x="1728" y="616" style="font-size:13px">their checkout</text>
-</g>
-<g>
-<rect x="1927" y="377" width="184" height="84" fill="#0a0a0a"/>
-<rect x="1920" y="370" width="184" height="84" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
-<rect x="1920" y="370" width="184" height="9" fill="#00e5ff"/>
-<text class="ttl" x="1932" y="412" style="font-size:16px">CI MIRRORS</text>
-<text class="sub" x="1932" y="436" style="font-size:13px">vault follows git</text>
-</g>
-<rect x="53" y="689" width="2048" height="54" fill="#0a0a0a"/>
-<rect x="46" y="682" width="2048" height="54" fill="#e5ff1a" stroke="#0a0a0a" stroke-width="3"/>
-<text class="note" x="66" y="715">THE VAULT NEVER WRITES TO GIT — an agent proposes, a human disposes. That single constraint is why someone else’s agent, with no repository access at all, can safely work on your code.</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1326" width="960" height="1326" role="img" aria-labelledby="t d">
+<title id="t">How a change reaches your repo through OpenVault</title>
+<desc id="d">A nine-step flow in four vertical lanes: the contributor, the vault, the owner, and git. The contributor prompts an agent, which reads a briefing, reads the code mirror, announces the work it plans, and files an anchored suggestion. The vault holds that suggestion in a review queue. The owner approves it, applies it in their own checkout and pushes to git. CI syncs the repository back into the mirror. A crossed-out line marks the one path that does not exist: the vault never writes to git.</desc>
+<defs>
+<style>.hdr{font:800 32px "Segoe UI",Inter,system-ui,sans-serif;letter-spacing:6px;fill:#0a0a0a}.sub{font:13px ui-monospace,"Cascadia Mono",Menlo,monospace;fill:#0a0a0a}.lane{font:800 15px "Segoe UI",Inter,system-ui,sans-serif;letter-spacing:2.2px;fill:#0a0a0a}.lanesub{font:11px ui-monospace,"Cascadia Mono",Menlo,monospace;fill:#555}.ttl{font:800 14px "Segoe UI",Inter,system-ui,sans-serif;letter-spacing:.5px;fill:#0a0a0a}.det{font:11.5px ui-monospace,"Cascadia Mono",Menlo,monospace;fill:#555}.num{font:800 15px "Segoe UI",Inter,system-ui,sans-serif;fill:#fff}.foot{font:13px ui-monospace,"Cascadia Mono",Menlo,monospace;fill:#0a0a0a}.never{font:800 13px "Segoe UI",Inter,system-ui,sans-serif;letter-spacing:2px;fill:#ff1a66}.wire{fill:none;stroke:#0a0a0a;stroke-width:3}</style>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#0a0a0a"/></marker>
+<marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9a9a9a"/></marker>
+</defs>
+<rect width="960" height="1326" fill="#f5f5f5"/>
+<g stroke="#e7e7e7" stroke-width="1"><path d="M0 0 V1326 M48 0 V1326 M96 0 V1326 M144 0 V1326 M192 0 V1326 M240 0 V1326 M288 0 V1326 M336 0 V1326 M384 0 V1326 M432 0 V1326 M480 0 V1326 M528 0 V1326 M576 0 V1326 M624 0 V1326 M672 0 V1326 M720 0 V1326 M768 0 V1326 M816 0 V1326 M864 0 V1326 M912 0 V1326 M960 0 V1326 M0 0 H960 M0 48 H960 M0 96 H960 M0 144 H960 M0 192 H960 M0 240 H960 M0 288 H960 M0 336 H960 M0 384 H960 M0 432 H960 M0 480 H960 M0 528 H960 M0 576 H960 M0 624 H960 M0 672 H960 M0 720 H960 M0 768 H960 M0 816 H960 M0 864 H960 M0 912 H960 M0 960 H960 M0 1008 H960 M0 1056 H960 M0 1104 H960 M0 1152 H960 M0 1200 H960 M0 1248 H960 M0 1296 H960"/></g>
+<rect x="282" y="156" width="234" height="1075" fill="#00e5ff" opacity="0.10"/>
+<rect x="798" y="156" width="138" height="1075" fill="#0a0a0a" opacity="0.05"/>
+<rect x="31" y="29" width="296" height="52" fill="#0a0a0a"/>
+<rect x="24" y="22" width="296" height="52" fill="#e5ff1a" stroke="#0a0a0a" stroke-width="3"/>
+<text class="hdr" x="42" y="59">OPENVAULT</text>
+<text class="sub" x="24" y="106">One prompt reaches your repo as a reviewed change, and nobody relays a message.</text>
+<text class="sub" x="24" y="128" fill="#555">The contributor cannot push. Their agent proposes; you approve; you push.</text>
+<rect x="31" y="163" width="234" height="46" fill="#0a0a0a"/>
+<rect x="24" y="156" width="234" height="46" fill="#e5ff1a" stroke="#0a0a0a" stroke-width="3"/>
+<text class="lane" x="40" y="185">CONTRIBUTOR</text>
+<text class="lanesub" x="24" y="224">cannot push to your repo</text>
+<rect x="289" y="163" width="234" height="46" fill="#0a0a0a"/>
+<rect x="282" y="156" width="234" height="46" fill="#00e5ff" stroke="#0a0a0a" stroke-width="3"/>
+<text class="lane" x="298" y="185">THE VAULT</text>
+<text class="lanesub" x="282" y="224">shared memory</text>
+<rect x="547" y="163" width="234" height="46" fill="#0a0a0a"/>
+<rect x="540" y="156" width="234" height="46" fill="#ff1a66" stroke="#0a0a0a" stroke-width="3"/>
+<text class="lane" x="556" y="185">OWNER</text>
+<text class="lanesub" x="540" y="224">reviews, then pushes</text>
+<rect x="805" y="163" width="138" height="46" fill="#0a0a0a"/>
+<rect x="798" y="156" width="138" height="46" fill="#d4d4d4" stroke="#0a0a0a" stroke-width="3"/>
+<text class="lane" x="814" y="185">GIT</text>
+<text class="lanesub" x="798" y="224">your repo</text>
+<g><rect x="31" y="254" width="234" height="74" fill="#0a0a0a"/>
+<rect x="24" y="247" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="24" y="247" width="234" height="9" fill="#e5ff1a"/>
+<rect x="34" y="269" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="47" y="287" text-anchor="middle">1</text>
+<text class="ttl" x="72" y="287">THE PROMPT</text>
+<text class="det" x="72" y="308">&#8220;add retries&#8221;</text></g>
+<g><rect x="31" y="366" width="234" height="74" fill="#0a0a0a"/>
+<rect x="24" y="359" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="24" y="359" width="234" height="9" fill="#e5ff1a"/>
+<rect x="34" y="381" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="47" y="399" text-anchor="middle">2</text>
+<text class="ttl" x="72" y="399">GET_BRIEFING</text>
+<text class="det" x="72" y="420">state + project skills</text></g>
+<g><rect x="31" y="478" width="234" height="74" fill="#0a0a0a"/>
+<rect x="24" y="471" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="24" y="471" width="234" height="9" fill="#e5ff1a"/>
+<rect x="34" y="493" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="47" y="511" text-anchor="middle">3</text>
+<text class="ttl" x="72" y="511">READ_CODE</text>
+<text class="det" x="72" y="532">mirror at one commit</text></g>
+<g><rect x="31" y="590" width="234" height="74" fill="#0a0a0a"/>
+<rect x="24" y="583" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="24" y="583" width="234" height="9" fill="#e5ff1a"/>
+<rect x="34" y="605" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="47" y="623" text-anchor="middle">4</text>
+<text class="ttl" x="72" y="623">ANNOUNCE_WORK</text>
+<text class="det" x="72" y="644">warns on overlap</text></g>
+<g><rect x="31" y="702" width="234" height="74" fill="#0a0a0a"/>
+<rect x="24" y="695" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="24" y="695" width="234" height="9" fill="#e5ff1a"/>
+<rect x="34" y="717" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="47" y="735" text-anchor="middle">5</text>
+<text class="ttl" x="72" y="735">SUGGEST_CHANGE</text>
+<text class="det" x="72" y="756">anchored edits + reason</text></g>
+<g><rect x="289" y="814" width="234" height="74" fill="#0a0a0a"/>
+<rect x="282" y="807" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="282" y="807" width="234" height="9" fill="#00e5ff"/>
+<text class="ttl" x="298" y="847">REVIEW QUEUE</text>
+<text class="det" x="298" y="868">held until you rule</text></g>
+<g><rect x="547" y="926" width="234" height="74" fill="#0a0a0a"/>
+<rect x="540" y="919" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="540" y="919" width="234" height="9" fill="#ff1a66"/>
+<rect x="550" y="941" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="563" y="959" text-anchor="middle">6</text>
+<text class="ttl" x="588" y="959">REVIEW_SUGGESTION</text>
+<text class="det" x="588" y="980">approve or reject</text></g>
+<g><rect x="547" y="1038" width="234" height="74" fill="#0a0a0a"/>
+<rect x="540" y="1031" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="540" y="1031" width="234" height="9" fill="#ff1a66"/>
+<rect x="550" y="1053" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="563" y="1071" text-anchor="middle">7</text>
+<text class="ttl" x="588" y="1071">APPLY AND PUSH</text>
+<text class="det" x="588" y="1092">in your own checkout</text></g>
+<g><rect x="289" y="1150" width="234" height="74" fill="#0a0a0a"/>
+<rect x="282" y="1143" width="234" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="282" y="1143" width="234" height="9" fill="#00e5ff"/>
+<rect x="292" y="1165" width="26" height="26" fill="#0a0a0a"/>
+<text class="num" x="305" y="1183" text-anchor="middle">8</text>
+<text class="ttl" x="330" y="1183">CI SYNCS BACK</text>
+<text class="det" x="330" y="1204">mirror = that commit</text></g>
+<g><rect x="805" y="1038" width="138" height="74" fill="#0a0a0a"/>
+<rect x="798" y="1031" width="138" height="74" fill="#fff" stroke="#0a0a0a" stroke-width="3"/>
+<rect x="798" y="1031" width="138" height="9" fill="#d4d4d4"/>
+<text class="ttl" x="814" y="1071">GIT</text>
+<text class="det" x="814" y="1092"></text></g>
+<path d="M258 396 H282" fill="none" stroke="#9a9a9a" stroke-width="2" marker-end="url(#ahg)"/>
+<text class="det" x="298" y="400">briefing built from items</text>
+<path d="M258 508 H282" fill="none" stroke="#9a9a9a" stroke-width="2" marker-end="url(#ahg)"/>
+<text class="det" x="298" y="512">no git pull needed</text>
+<path d="M258 620 H282" fill="none" stroke="#9a9a9a" stroke-width="2" marker-end="url(#ahg)"/>
+<text class="det" x="298" y="624">names who else is in there</text>
+<path d="M258 732 H282" fill="none" stroke="#9a9a9a" stroke-width="2" marker-end="url(#ahg)"/>
+<text class="det" x="298" y="736">each anchor must match once</text>
+<path class="wire" d="M141 321 V359" marker-end="url(#ah)"/>
+<path class="wire" d="M141 433 V471" marker-end="url(#ah)"/>
+<path class="wire" d="M141 545 V583" marker-end="url(#ah)"/>
+<path class="wire" d="M141 657 V695" marker-end="url(#ah)"/>
+<path class="wire" d="M141 769 V787 H399 V807" marker-end="url(#ah)"/>
+<path class="wire" d="M399 881 V899 H657 V919" marker-end="url(#ah)"/>
+<path class="wire" d="M657 993 V1031" marker-end="url(#ah)"/>
+<path class="wire" d="M774 1068 H798" marker-end="url(#ah)"/>
+<path class="wire" d="M867 1105 V1124 H399 V1143" marker-end="url(#ah)"/>
+<path d="M516 844 H798" fill="none" stroke="#ff1a66" stroke-width="3" stroke-dasharray="9 7"/>
+<circle cx="657" cy="844" r="17" fill="#f5f5f5"/>
+<path d="M648 835 L666 853 M666 835 L648 853" stroke="#ff1a66" stroke-width="5" stroke-linecap="square"/>
+<text class="never" x="657" y="817" text-anchor="middle">NEVER</text>
+<rect x="31" y="1263" width="912" height="46" fill="#0a0a0a"/>
+<rect x="24" y="1256" width="912" height="46" fill="#e5ff1a" stroke="#0a0a0a" stroke-width="3"/>
+<text class="foot" x="42" y="1285">The vault stores no git credential. Nothing lands in your repo that you did not approve and push yourself.</text>
 </svg>

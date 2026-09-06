@@ -228,7 +228,7 @@ export default function PipelineScene() {
     // Lane plates. Billboarded to face the camera rather than lying flat on
     // the ground: laid flat they were skewed by the isometric projection into
     // near-illegibility, which defeats the point of labelling the lanes.
-    const laneNames = ["YOUR AGENT", "THE VAULT", "THEIR AGENT"];
+    const laneNames = ["CONTRIBUTOR", "THE VAULT", "OWNER"];
     const laneColours = [LIME, CYAN, MAGENTA];
     const billboards: THREE.Mesh[] = [];
     laneNames.forEach((name, i) => {

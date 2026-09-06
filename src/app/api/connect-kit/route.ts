@@ -690,7 +690,11 @@ const { readFileSync } = require("node:fs");
 
 const VAULT = "${base}";
 const PROJECT_ID = "${project.id}";
-const MAX_CHARS = 200000;
+// The server chunks anything over 200k chars and rejoins it on read, so 200k
+// is a chunk size, not a ceiling. This hook treated it as a ceiling and
+// dropped bigger files without a word, keeping a repo's largest modules out
+// of the mirror. Match the real bound (MAX_TOTAL_FILE_CHARS in src/lib/code.ts).
+const MAX_CHARS = 4000000;
 
 function sh(cmd) { return execSync(cmd, { encoding: "utf8" }).trim(); }
 
@@ -707,7 +711,9 @@ async function main() {
     if (flag === "D") { deletes.push(path); continue; }
     try {
       const content = readFileSync(path, "utf8");
-      if (content.length <= MAX_CHARS && !content.includes("\\u0000")) files.push({ path, content });
+      if (content.includes("\\u0000")) continue;
+      if (content.length > MAX_CHARS) { console.error("openvault: skipped " + path + " (" + content.length + " chars)"); continue; }
+      files.push({ path, content });
     } catch { /* binary or unreadable — skip */ }
   }
   if (!files.length && !deletes.length) return;

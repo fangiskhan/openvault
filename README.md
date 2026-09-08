@@ -35,7 +35,7 @@ The in-app **Connect agent** button fills in your token and project ids. By hand
 claude mcp add --transport http openvault http://localhost:6900/api/mcp --header "Authorization: Bearer <ovk_ token>"
 ```
 
-Drop the header when running locally with no `MCP_TOKEN`. The panel also carries the Codex form, which reads the token from an environment variable rather than a flag, and the Hermes form, which prompts for the token and keeps it in its own `.env`.
+Drop the header when running locally with no `MCP_TOKEN`. The panel also carries a Codex form and a Hermes form. The Codex form is generated but has not been run against the Codex CLI, so treat it as unverified until it is tested on 2026-09-10. The Hermes form prompts for the token and keeps it in its own `.env`.
 
 The server speaks MCP protocol `2025-06-18`, `2025-03-26` and `2024-11-05` over Streamable HTTP, echoing whichever version the client asks for. It runs single-response: there is no GET event stream, and a GET returns 405.
 

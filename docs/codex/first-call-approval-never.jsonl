@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a08b5a-54c7-7bb2-9f46-a7ea60a63a4e"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll retrieve the OpenVault project briefing and reproduce only its headline exactly."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"openvault","tool":"get_briefing","arguments":{"projectId":"OpenVault"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"openvault","tool":"get_briefing","arguments":{"projectId":"OpenVault"},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"I couldn’t retrieve it: the OpenVault MCP call requires approval, but approvals are disabled in this session."}}
+{"type":"turn.completed","usage":{"input_tokens":86328,"cached_input_tokens":69632,"cache_write_input_tokens":0,"output_tokens":237,"reasoning_output_tokens":53}}

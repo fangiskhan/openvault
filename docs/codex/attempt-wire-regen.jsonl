@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a08b64-9666-70c1-a11f-756b18a51556"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll retrieve the OpenVault project briefing and return only its headline exactly as stored."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"openvault","tool":"get_briefing","arguments":{"projectId":"OpenVault"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"openvault","tool":"get_briefing","arguments":{"projectId":"OpenVault"},"result":{"content":[{"type":"text","text":"{\n  \"scope\": \"project\",\n  \"generatedAt\": \"2026-09-10T12:57:18.935Z\",\n  \"headline\": {\n    \"rag\": \"green\",\n    \"text\": \"On track — no blocking signals in the window.\"\n  },\n  \"attention\": [],\n  \"pendingReview\": [],\n  \"recentDecisions\": [],\n  \"recentlyUpdated\": [],\n  \"coverage\": {\n    \"itemsConsidered\": 0,\n    \"projects\": 1,\n    \"windowDays\": 14\n  },\n  \"generator\": \"templated\"\n}"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"On track — no blocking signals in the window."}}
+{"type":"turn.completed","usage":{"input_tokens":114122,"cached_input_tokens":101120,"cache_write_input_tokens":0,"output_tokens":332,"reasoning_output_tokens":129}}

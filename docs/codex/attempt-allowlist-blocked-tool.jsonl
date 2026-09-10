@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a08b5f-1063-7972-a526-8a26b16239e9"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll query the OpenVault graph directly and report its node count."}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"`get_graph` is not available. I can see these OpenVault tools:\n\n`get_attention`, `get_briefing`, `get_code_map`, `get_recent_activity`, `get_status`, `list_projects`, `read_code`, `read_item`, `search`, `search_code` — each under both `openvault` and `openvault_local` namespaces."}}
+{"type":"turn.completed","usage":{"input_tokens":88181,"cached_input_tokens":71680,"cache_write_input_tokens":0,"output_tokens":326,"reasoning_output_tokens":70}}

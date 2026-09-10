@@ -1125,9 +1125,10 @@ export default function AppShell() {
               </p>
 
               <h4 className="rail-h">Codex</h4>
-              <p className="empty" style={{ margin: "0 0 8px", color: "var(--magenta)" }}>
-                Unverified: this form is generated but has not been run against the Codex CLI. Scheduled for
-                verification on 2026-09-10.
+              <p className="empty" style={{ margin: "0 0 8px" }}>
+                Tested on codex-cli 0.153.4, 2026-09-10, against the deployed vault: this command registered the
+                server, and <code>codex exec --approve-for-me</code> then returned a <code>get_briefing</code> headline
+                end to end.
               </p>
               {(() => {
                 const url = (origin || "http://localhost:6900") + "/api/mcp";

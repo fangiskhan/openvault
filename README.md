@@ -35,7 +35,26 @@ The in-app **Connect agent** button fills in your token and project ids. By hand
 claude mcp add --transport http openvault http://localhost:6900/api/mcp --header "Authorization: Bearer <ovk_ token>"
 ```
 
-Drop the header when running locally with no `MCP_TOKEN`. The panel also carries a Codex form and a Hermes form. The Codex form is generated but has not been run against the Codex CLI, so treat it as unverified until it is tested on 2026-09-10. The Hermes form prompts for the token and keeps it in its own `.env`.
+Drop the header when running locally with no `MCP_TOKEN`. The panel also carries the Codex and Hermes forms; the Hermes one prompts for the token and keeps it in its own `.env`.
+
+### Connect from Codex CLI
+
+Tested on `codex-cli 0.153.4` on 2026-09-10, against the live vault. Codex reads the token from an environment variable, never from a flag, so export it in the shell that launches Codex:
+
+```bash
+export OPENVAULT_TOKEN=ovk_...
+codex mcp add openvault --url https://openvault-hub.vercel.app/api/mcp --bearer-token-env-var OPENVAULT_TOKEN
+```
+
+That is the exact command that ran. It writes this to `~/.codex/config.toml`, which you can paste instead:
+
+```toml
+[mcp_servers.openvault]
+url = "https://openvault-hub.vercel.app/api/mcp"
+bearer_token_env_var = "OPENVAULT_TOKEN"
+```
+
+Codex sends MCP protocol `2025-06-18`, which the vault echoes. Three things the docs do not spell out. `codex doctor` warns when an MCP env var is missing, without naming it and still exiting 0, while `codex mcp list` shows the server enabled either way. A non-interactive `codex exec` refused the vault call with `MCP tool call requires approval, but approval policy is never`; `--approve-for-me` opened it, and `exec` does not accept `-a` (`--full-auto` is not accepted on this version). And `exec` waits for EOF on stdin before starting, so the call that returned a briefing headline end to end was `codex exec --json --approve-for-me "..." < /dev/null`. Every finding, including what the docs and the CLI disagree on, is in [docs/codex/field-notes.md](docs/codex/field-notes.md).
 
 The server speaks MCP protocol `2025-06-18`, `2025-03-26` and `2024-11-05` over Streamable HTTP, echoing whichever version the client asks for. It runs single-response: there is no GET event stream, and a GET returns 405.
 

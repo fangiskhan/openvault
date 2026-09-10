@@ -1153,8 +1153,9 @@ export default function AppShell() {
               <p className="empty" style={{ margin: "6px 0 14px" }}>
                 Codex reads the token from an <em>environment variable</em>, not the flag — set{" "}
                 <code>OPENVAULT_TOKEN=ovk_…</code> in the shell that launches it. If that variable isn&apos;t visible
-                to the Codex process it still reports the server as authenticated, but sends no header and every call
-                fails — so export it before starting Codex, not after.
+                to the Codex process, the MCP client does not start: the TUI opens with{" "}
+                <code>MCP startup failed: Environment variable OPENVAULT_TOKEN for MCP server &apos;openvault&apos; is not set</code>
+                — so export it before starting Codex, not after.
               </p>
 
               <h4 className="rail-h">Hermes</h4>

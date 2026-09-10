@@ -392,10 +392,71 @@ from a clean checkout for the same reason.
 - Every `exec` performs the full MCP handshake for every configured server,
   including servers the model never calls.
 
-### Interactive `/mcp`
+### Interactive `codex`: first launch, and what `/mcp` lists
 
-PENDING the owner opening `codex` interactively and running `/mcp`. Their
-answer goes here verbatim.
+**First launch, `OPENVAULT_TOKEN` not exported in that shell** (owner's
+terminal, directory `~`, pasted verbatim):
+
+```
+⚠ MCP client for `openvault` failed to start: MCP startup failed: Environment variable OPENVAULT_TOKEN for MCP server
+  'openvault' is not set
+
+⚠ MCP startup incomplete (failed: openvault)
+```
+
+So the unset-variable case is now observed on every surface. `codex mcp
+list`: no indication. `codex doctor`: a warning that does not name the
+variable, exit 0. Interactive `codex`: the MCP client does not start, and
+the error names the variable and the server. Whether a header would have
+been sent is moot; the client never initialises. The earlier Connect-panel
+wording "sends no header and every call fails" described a state that does
+not occur.
+
+Two other things the interactive first launch showed that `exec` never did:
+an update banner (`0.153.4 -> 0.154.0`, matching `doctor`), and a Windows
+sandbox setup prompt (`Set up default sandbox (requires Administrator
+permissions)` / `Use non-admin sandbox (higher risk if prompt injected)` /
+`Quit`) that must be answered before any prompt. The eight `exec` runs
+recorded `sandbox_policy: {"type":"read-only"}` without ever asking.
+
+**Second launch, `OPENVAULT_TOKEN` exported, then `/mcp`** (owner's
+PowerShell, directory `~`, pasted verbatim). Note the version: between the
+two launches the owner ran the update the banner suggested, so this
+observation is on **codex-cli 0.154.0** (published 2026-09-09), not the
+0.153.4 pin every other number in these notes comes from. The global install
+was re-pinned to 0.153.4 afterwards.
+
+```
+$env:OPENVAULT_TOKEN = ((Get-Content "$HOME\.claude.json" -Raw | ConvertFrom-Json).mcpServers.'openvault-live'.headers.Authorization -replace '^Bearer\s+','')
+$env:OPENVAULT_TOKEN.Length
+52
+codex
+╭─────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.154.0)                  │
+│ model:     gpt-5.6-terra   /model to change │
+│ directory: ~                                │
+╰─────────────────────────────────────────────╯
+
+/mcp
+
+🔌  MCP Tools
+
+  • codex_apps: connected (12 tools)
+  • openvault: connected (48 tools)
+
+  Use /mcp verbose for tools and resources.
+```
+
+- No `MCP startup failed` warning this time, and no sandbox prompt (either
+  the first launch's answer persisted or 0.154.0's Windows sandbox
+  provisioning changes suppressed it; not determined).
+- `openvault: connected (48 tools)`: the full surface, no allowlist, matching
+  the 48 the proxy counted in `tools/list`.
+- The built-in server shows as **`codex_apps` with 12 tools**. In the `exec`
+  JSONL the same run-time facility appeared as `server: "codex"` (tool
+  `list_mcp_resources`) whose result listed resources under
+  `server: "codex_apps"`. Treat both names as taken.
+- `/mcp verbose` exists for per-tool and resource listings; not run.
 
 ## Commands that make up the tested README block
 

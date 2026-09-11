@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a08fd3-c227-73c3-944c-4af4c0e6e08c"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"No openvault MCP tools are currently visible."}}
+{"type":"turn.completed","usage":{"input_tokens":14730,"cached_input_tokens":14080,"cache_write_input_tokens":0,"output_tokens":95,"reasoning_output_tokens":80}}

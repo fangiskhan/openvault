@@ -471,3 +471,226 @@ The Codex form in the Connect panel (`src/components/AppShell.tsx`; the
 connect-kit route has no Codex content) emits the same export and `codex
 mcp add` pair with the URL taken from the page origin. Its "unverified"
 notice was replaced by a line stating what was tested and on which URL.
+
+## 2026-09-11 · codex-cli 0.153.4 · evening 2
+
+Pin verified at the start (`codex --version` → `codex-cli 0.153.4`).
+Artifacts: `docs/codex/evening2-*.jsonl` and `.stderr`; Codex rollouts under
+`~/.codex/sessions/2026/09/11/`, cited below by their `T18-mm-ss` timestamp.
+The pre-evening `~/.codex/config.toml` was copied to the session scratchpad
+before any edit. Token loaded from `~/.claude.json` by the same one-liner as
+evening 1. A grep of `AGENTS.md`, this file and every `evening2-*` artifact
+for the token value returned 0 files (author's grep; scope did not include
+the rollouts or the config backup). Exit codes and command-line flags are
+recorded only in the launching session's transcript; the rollouts record
+`approval_policy` (`never` = plain `exec`, `on-request` = `--approve-for-me`),
+which is how each run's flag is confirmed below. A second pass of six
+independent reviewers checked every claim on 2026-09-11; their corrections
+are folded in.
+
+### The kit block, and which keys 0.153.4 accepts
+
+Written into `~/.codex/config.toml` itself rather than passed with `-c`, so
+that `--strict-config`, whose help text scopes it to config.toml fields
+("Error out when config.toml contains fields that are not recognized by this
+version of Codex"), actually validates it:
+
+```toml
+[mcp_servers.openvault]
+url = "https://openvault-hub.vercel.app/api/mcp"
+bearer_token_env_var = "OPENVAULT_TOKEN"
+required = true
+default_tools_approval_mode = "writes"
+enabled_tools = ["list_projects", "get_briefing", "get_status", "get_attention", "search", "read_item", "get_recent_activity", "get_code_map", "read_code", "search_code"]
+disabled_tools = ["delete_item"]
+```
+
+- `codex exec --json --strict-config "Reply with the single word OK." < /dev/null`
+  (`evening2-strict-config.*`, rollout T18-35-37): final message `OK`; stderr
+  held exactly one line, the stdin banner; the shell reported exit 0. All four
+  new keys accepted.
+- `codex mcp get openvault` displays `enabled_tools`, `disabled_tools` and
+  `default_tools_approval_mode: writes`. It does **not** display `required`.
+  Accepted by the parser, invisible in `get`.
+
+### What each key does under `exec`
+
+- **`required = true`** (`evening2-2c-required-unset-var.*`, no rollout: the
+  session was never created). With `OPENVAULT_TOKEN` unset, stderr:
+  `codex_core::session: Failed to create session: required MCP servers failed
+  to initialize: openvault: Environment variable OPENVAULT_TOKEN for MCP
+  server 'openvault' is not set`, then `Error: thread/start: thread/start
+  failed: error creating thread: Fatal error: Failed to initialize session:
+  required MCP servers failed to initialize: openvault: Environment variable
+  OPENVAULT_TOKEN for MCP server 'openvault' is not set (code -32603)`. Zero
+  JSONL events; the shell reported exit 1 in about a second. The only
+  without-`required` observation is evening 1's interactive launch, which
+  warned and continued; no plain-`exec` run without the key and with the
+  variable unset was made, so the contrast is across surfaces.
+- **`disabled_tools = ["delete_item"]`**. The first test
+  (`evening2-2b-disabled-delete-item.*`, rollout T18-37-01, `--approve-for-me`)
+  ran under the full block, where the ten-name allowlist already excludes
+  `delete_item`, so it proved nothing about `disabled_tools` on its own. The
+  isolating run (`evening2-2b-isolated-disabled-only.*`, rollout T19-05-10,
+  `--approve-for-me`)
+  removed `enabled_tools` and kept `disabled_tools`: the model listed its
+  `mcp__openvault__` tools and reported *"47 tools found.
+  `mcp__openvault__delete_item` is not among them."*, then the attempted call
+  returned `TypeError: tools.mcp__openvault__delete_item is not a function`.
+  48 → 47 with one key. The tool is absent from the harness namespace, not
+  merely refused.
+- **`enabled_tools`** (`evening2-2d-tool-listing-v2.*`, rollout T18-39-39,
+  `--approve-for-me`). Asked to search its tool list for names starting
+  `mcp__openvault__`, the model listed exactly the ten and said `10 tools.`
+  An earlier attempt (`evening2-2d-tool-listing.*`, rollout T18-36-54, plain
+  `exec`, prompt ending "Do not call any of them") answered *"No openvault MCP
+  tools are currently visible."*; its rollout shows no tool search between the
+  prompt and the reply, while run 2a in the same config ten seconds earlier
+  had found `list_projects`. Kept as an artifact; not a finding about the
+  allowlist.
+- **`default_tools_approval_mode = "writes"`**
+  (`evening2-2a-plain-exec-writes-mode.*`, rollout T18-36-44, plain `exec`).
+  `list_projects` → `MCP tool call requires approval, but approval policy is
+  never`. In the file, the same result as evening 1's `-c` override. Under
+  `exec` the key changes nothing observable. Why is not shown by any
+  artifact. Two candidates: `exec`'s `approval_policy: never` refuses before
+  any per-tool mode is consulted; or the mode is consulted and decides
+  read-versus-write from the MCP `readOnlyHint` annotation, which OpenVault
+  does not send. `src/lib/mcp/tools.ts` contains no `annotations` at all and
+  `tools/list` in `src/app/api/mcp/route.ts:117` ships only name, description
+  and inputSchema. The owner's interactive run under this block is the
+  discriminating test: a read tool that runs unprompted rules out the second
+  candidate; an approval prompt on `list_projects` makes it the likely
+  cause, and the fix would be `annotations: { readOnlyHint: true }` on the
+  read tools, a server change for a later evening. PENDING.
+
+### Connect cost from config.toml, one server (the before/after)
+
+Same 18-word prompt as evening 1, `--approve-for-me`, one configured server,
+`AGENTS.md` at 4,600 bytes. `token_usage_record.usage.input_tokens`, first
+and second model call, main thread. Config state per run is from the
+launching transcript; the rollouts do not record it, and 3ii and 3iii are
+indistinguishable in every artifact because `delete_item` is outside the
+allowlist either way.
+
+| Run | Config | Artifact / rollout | 1st call | 2nd call | Δ |
+| --- | --- | --- | --- | --- | --- |
+| 3i | `url` + `bearer_token_env_var` only | `evening2-3i-baseline.*` / T18-38-30 | 16,319 | 24,978 | +8,659 |
+| 3ii | + `enabled_tools` (10) | `evening2-3ii-allowlist.*` / T18-38-55 | 16,319 | 24,971 | +8,652 |
+| 3iii | + `disabled_tools` | `evening2-3iii-allowlist-disabled.*` / T18-39-17 | 16,319 | 24,974 | +8,655 |
+
+- The first call is identical in all three. The second-call delta varies by
+  7 tokens. **With this prompt, the allowlist does not change what a turn
+  costs**, and the reason is a coincidence worth stating: in 3i the model's
+  search (`x.name.includes("openvault")`, printing name and description)
+  returned a listing the harness cut at 10,000 tokens (`original token
+  count: 48975`, 11 names visible in the surviving head and tail); in 3ii and
+  3iii the search (name or description) printed the ten allowlisted tool
+  objects in full, 40,508 characters, uncut. Ten full schemas happen to be
+  about the size of the cap. Three allowlisted tools would cost less; the
+  allowlist is not cost-neutral in general.
+- 48,975 untruncated tokens for the whole listing is about 1,020 per tool,
+  matching evening 1's 99,039 for 96. That the listing held 48 tools is
+  inferred from evening 1's proxy count; tonight's artifact shows only the
+  11 names that survived truncation.
+- What the model prints drives the delta. Listing ten names only (2d-v2,
+  rollout T18-39-39) cost **+223** (16,521 → 16,744). The ~8.7k is echoed
+  schema text, not a connect fee: evening 1 measured +107 with no MCP
+  servers at all.
+- Cross-check against evening 1: 16,319 − 15,353 = 966 tokens on the matched
+  `--approve-for-me` pair (same prompt, same flag; evening 1 had two servers
+  via `-c`, tonight one from config.toml, which evening 1's own table shows
+  does not move the first call). The difference expected to move it is
+  `AGENTS.md`, 678 → 4,600 bytes (`git show HEAD:AGENTS.md | wc -c` = 678);
+  3,922 ÷ 4 = 980. The plain-`exec` pair, 4a's 15,678 against evening 1's
+  14,550 with a different four-word prompt, gives +1,128. **`AGENTS.md` at
+  this size costs roughly 970–1,130 tokens on every first call.**
+- On the wire nothing was captured tonight. Evening 1's capture stands:
+  `tools/list` carried all 48 regardless of the allowlist, which is applied
+  client-side.
+
+### `AGENTS.md`
+
+- Written below the `<!-- END:nextjs-agent-rules -->` marker, since `next
+  dev` rewrites that block on every boot; lines 1–9 are byte-identical to
+  `HEAD:AGENTS.md`. 4,600 bytes. The 32 KiB `project_doc_max_bytes` cap is
+  from the vault's 2026-09-08 docs read, not from any CLI output. The
+  vault-first rules are lifted from the two templates the server generates in
+  `src/app/api/connect-kit/route.ts` (the global `CLAUDE.md` at lines ~27–70
+  and the per-project one at ~770–890) and from evening 1's findings (pass the
+  project **id**; say so if an allowlisted tool is missing); the "Verifying
+  this repository" section comes from this README and `package.json`.
+  `CLAUDE.md` in this repo is `@AGENTS.md`, so Claude Code sessions here now
+  receive the same loop.
+- The plan's verification form, `codex --ask-for-approval never "Summarize
+  the current instructions."`, opens the TUI: `-a` exists on interactive
+  `codex` only (`codex exec --help` has no such flag). `codex exec --json
+  "Summarize the current instructions." < /dev/null` was used instead.
+- **Trust.** The pre-evening backup of `config.toml` holds one entry,
+  `[projects.'c:\users\user'] trust_level = "trusted"`, and nothing for
+  `D:\openvault`. The vault's 2026-09-08 docs read recorded that since 0.150
+  untrusted projects load neither `AGENTS.md` nor project hooks; the docs
+  sentence itself is not saved here.
+- 4a (`evening2-4a-agents-summary-untrusted.*`, rollout T18-38-22, plain
+  `exec`, run before any `[projects]` write tonight; the config at that
+  instant is not snapshotted, only bounded by the backup before it and the
+  writes after). The rollout's injected instructions begin `# AGENTS.md
+  instructions for D:\openvault`, so the file was loaded. The summary quotes
+  the loop: *"For project tasks, first consult OpenVault MCP: project
+  briefing, activity, relevant team skills, and active work"*, *"Before
+  editing, announce intended paths in OpenVault and check for
+  overlaps/suggestions"*, *"Record useful decisions, findings, and handoffs
+  back into OpenVault before finishing"*, *"Verify code changes with `npm run
+  check`"*, and *"filesystem is read-only and approvals are unavailable"*,
+  matching the rollout's `sandbox_policy: read-only`, `approval_policy:
+  never`. First-call input 15,678.
+- 4b (`evening2-4b-agents-summary-trusted.*`, rollout T18-39-52), after
+  appending `[projects.'d:\openvault'] trust_level = "trusted"`: same
+  substance in different wording (*"identify the project by ID, read its
+  briefing/activity/skills/active work"*, *"announce intended work in the
+  vault"*, *"record useful progress, decisions, and discoveries back to the
+  vault before finishing"*), first-call input **15,678**, identical. **Under
+  `exec` on 0.153.4, `AGENTS.md` was injected into a session whose cwd had
+  no trust entry.** Whether the TUI's trust prompt gates it, and whether
+  project hooks load, were not tested. The guardian subagent rollouts for
+  3i–3iii begin with the same injected `AGENTS.md` block: the approval
+  reviewer reads it too.
+
+### Kit design note the numbers force
+
+`AGENTS.md` names nineteen tools. Eleven are outside the ten-name allowlist:
+six on the read side (`list_skills`, `get_skill`, `get_active_work`,
+`list_suggestions`, `list_files`, `read_file`) and five writes
+(`announce_work`, `append_update`, `import_notes`, `sync_code`,
+`suggest_change`). An agent following the file under this block cannot
+complete the start-of-task steps, let alone write back; evening 1's
+blocked-tool run shows what it sees instead (*"`get_graph` is not
+available"*). The intended shape is reads free, writes gated, which is what
+`default_tools_approval_mode = "writes"` names and which only has meaning
+where approval prompts exist. For the kit: add the six read tools to
+`enabled_tools`, add `announce_work`, `append_update` and `import_notes` and
+let `"writes"` gate them, decide `suggest_change` and `sync_code` per
+project, and, if the owner's interactive run shows reads being prompted,
+declare `readOnlyHint` on the read tools server-side so the mode has
+something to key on.
+
+### Shipaton
+
+"Shipaton 2026: Seoul" on dev-korea.com, "Dev Korea: Shipaton 2026" on
+shipaton.com; the "#14" the plan uses appears only in the event's URL slug,
+`dev-korea-14-september-2026`, not in any title or badge. Monday
+2026-09-21 at MARU180, organiser Dev Korea, hosted with RevenueCat. **16:00
+KST** is the optional 모각코 doors-open; the main programme is 18:30 and the
+community demos 19:30–20:00. RSVP: https://luma.com/9tuvvggu (the "Details
+and sign-up" link on shipaton.com/events; 136 going and a waitlist enabled
+at fetch time). Event page:
+https://dev-korea.com/events/dev-korea-14-september-2026. Community demos:
+*"Sign up when you register and we'll pick 3-4"*, five minutes each, which
+is the demo-slot request plan step 22 wanted, available at RSVP time. The
+lookup was done by the launching session, not by any Codex run. The owner
+registers; the agent did not.
+
+### Config left in place
+
+The full block above, plus the `d:\openvault` trust entry added tonight.
+Backup of the pre-evening file in the session scratchpad.

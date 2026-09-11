@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a08fd3-98c3-72c3-a14b-63fb6e70250d"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll retrieve the OpenVault project briefing from the connected MCP server and return its headline exactly as provided."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"openvault","tool":"list_projects","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"openvault","tool":"list_projects","arguments":{},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Unable to retrieve it: the OpenVault MCP call requires approval, but this session’s approval policy is set to never."}}
+{"type":"turn.completed","usage":{"input_tokens":61623,"cached_input_tokens":46336,"cache_write_input_tokens":0,"output_tokens":176,"reasoning_output_tokens":43}}

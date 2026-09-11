@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a08fd6-4377-7951-95bf-345fe831b182"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll inspect the available tool registry only; I won’t invoke any vault tools."}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"mcp__openvault__get_attention  \nmcp__openvault__get_briefing  \nmcp__openvault__get_code_map  \nmcp__openvault__get_recent_activity  \nmcp__openvault__get_status  \nmcp__openvault__list_projects  \nmcp__openvault__read_code  \nmcp__openvault__read_item  \nmcp__openvault__search  \nmcp__openvault__search_code  \n\n10 tools."}}
+{"type":"turn.completed","usage":{"input_tokens":33265,"cached_input_tokens":26112,"cache_write_input_tokens":0,"output_tokens":206,"reasoning_output_tokens":38}}

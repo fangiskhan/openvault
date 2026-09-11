@@ -685,10 +685,17 @@ community demos 19:30–20:00. RSVP: https://luma.com/9tuvvggu (the "Details
 and sign-up" link on shipaton.com/events; 136 going and a waitlist enabled
 at fetch time). Event page:
 https://dev-korea.com/events/dev-korea-14-september-2026. Community demos:
-*"Sign up when you register and we'll pick 3-4"*, five minutes each, which
-is the demo-slot request plan step 22 wanted, available at RSVP time. The
-lookup was done by the launching session, not by any Codex run. The owner
-registers; the agent did not.
+*"Shipaton submissions, 5 minutes each. Sign up when you register and we'll
+pick 3-4"*. Shipaton is *"RevenueCat's global hackathon for builders
+shipping real apps to real stores"*; the demo slots are for those entries,
+and OpenVault is not one (a self-hosted web app and MCP server, no store
+listing, no subscriptions). Plan step 22 asks for something different: bring
+the kit on a laptop, show the CAUTION beat to three people, and ask the
+organisers for a ten-minute slot at the *next* event. The page also says
+*"You don't need to be registered for Shipaton to attend."* The lookup was
+done by the launching session, not by any Codex run. The owner registered on 2026-09-11 as an attendee; OpenVault is not a
+Shipaton entry, so no Shipaton demo slot was requested. The agent did not
+register.
 
 ### Config left in place
 

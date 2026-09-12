@@ -558,11 +558,46 @@ disabled_tools = ["delete_item"]
   read-versus-write from the MCP `readOnlyHint` annotation, which OpenVault
   does not send. `src/lib/mcp/tools.ts` contains no `annotations` at all and
   `tools/list` in `src/app/api/mcp/route.ts:117` ships only name, description
-  and inputSchema. The owner's interactive run under this block is the
-  discriminating test: a read tool that runs unprompted rules out the second
-  candidate; an approval prompt on `list_projects` makes it the likely
-  cause, and the fix would be `annotations: { readOnlyHint: true }` on the
-  read tools, a server change for a later evening. PENDING.
+  and inputSchema. The owner's interactive run under this block (next
+  subsection) ran both read tools with **no approval prompt**, which rules
+  out the second candidate in the form that mattered: missing `readOnlyHint`
+  does not force a prompt on reads. Whether the `"writes"` key did the work,
+  or the TUI's `on-request` default simply did not ask, is not isolated;
+  the next test is a write tool inside the allowlist under the same block.
+
+### Interactive TUI run, 2026-09-12, under the full block
+
+Owner's terminal, `OPENVAULT_TOKEN` exported, `codex` on 0.153.4 (the
+update prompt offered 0.154.0 and was declined with "Skip until next
+version"). Prompt: *"Use the openvault MCP server: call list_projects, then
+get_briefing with the id of the project named OpenVault, and print the
+headline verbatim."* Pasted verbatim, minus the tool-result JSON bodies:
+
+```
+• I'll retrieve the OpenVault project briefing and reproduce its headline exactly.
+
+• Called openvault.list_projects({})
+  └ [{"id": "cms5bs1zy0000l7047mxueapq", "name": "OpenVault", ...}, ...]
+
+• Called openvault.get_briefing({"projectId":"cms5bs1zy0000l7047mxueapq"})
+  └ {"scope": "project", ..., "headline": {"rag": "green", "text": "On track — no
+        blocking signals in the window."}, ..., "coverage": {"itemsConsidered": 38, ...}}
+
+• On track — no blocking signals in the window.
+```
+
+- No approval prompt appeared for either call. Rollout
+  `~/.codex/sessions/2026/09/12/rollout-2026-09-12T13-53-34-*`: `cli_version`
+  0.153.4, `source: "cli"`, `approval_policy: on-request`, `approvals_reviewer:
+  user`. No guardian was involved; the TUI runs with the user as reviewer.
+- The model resolved the id through `list_projects` first and the briefing
+  came back with `itemsConsidered: 38`, the real one, not the empty-scope
+  shape a name-keyed call returns.
+- The TUI prints tool calls as `openvault.list_projects`, not the
+  `mcp__openvault__` form the `exec` rollouts use.
+- Not tested: a write tool under `"writes"` mode (none is in the allowlist),
+  and the same reads with `default_tools_approval_mode` removed. Those two
+  runs would say whether the key is doing anything in the TUI.
 
 ### Connect cost from config.toml, one server (the before/after)
 
@@ -669,10 +704,11 @@ available"*). The intended shape is reads free, writes gated, which is what
 `default_tools_approval_mode = "writes"` names and which only has meaning
 where approval prompts exist. For the kit: add the six read tools to
 `enabled_tools`, add `announce_work`, `append_update` and `import_notes` and
-let `"writes"` gate them, decide `suggest_change` and `sync_code` per
-project, and, if the owner's interactive run shows reads being prompted,
-declare `readOnlyHint` on the read tools server-side so the mode has
-something to key on.
+let `"writes"` gate them, and decide `suggest_change` and `sync_code` per
+project. The interactive run showed reads passing unprompted without any
+`readOnlyHint`, so the annotation is not needed for the read side; whether
+`"writes"` mode prompts on the write tools is the test that decides if it
+is needed for the write side.
 
 ### Shipaton
 
